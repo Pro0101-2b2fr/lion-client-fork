@@ -2,6 +2,7 @@ package com.lionclient.feature.module.impl;
 
 import com.lionclient.feature.module.Category;
 import com.lionclient.feature.module.Module;
+import com.lionclient.feature.setting.BooleanSetting;
 import com.lionclient.feature.setting.EnumSetting;
 import com.lionclient.feature.setting.NumberSetting;
 import net.minecraft.client.Minecraft;
@@ -17,6 +18,7 @@ public final class PlayerEspModule extends Module {
     private final NumberSetting red = new NumberSetting("Red", 0, 255, 5, 255);
     private final NumberSetting green = new NumberSetting("Green", 0, 255, 5, 60);
     private final NumberSetting blue = new NumberSetting("Blue", 0, 255, 5, 60);
+    private final BooleanSetting seeInvis = new BooleanSetting("See Invis", false);
 
     public PlayerEspModule() {
         super("PlayerESP", "Draws a box around other players trough walls.", Category.RENDER, Keyboard.KEY_NONE);
@@ -42,6 +44,7 @@ public final class PlayerEspModule extends Module {
         addSetting(red);
         addSetting(green);
         addSetting(blue);
+        addSetting(seeInvis);
     }
 
     @Override
@@ -75,7 +78,7 @@ public final class PlayerEspModule extends Module {
                 }
 
                 EntityPlayer player = (EntityPlayer) object;
-                if (player == minecraft.thePlayer || player.isInvisible() || AntiBotModule.shouldIgnore(player)) {
+                if (player == minecraft.thePlayer || (!seeInvis.isEnabled() && player.isInvisible()) || AntiBotModule.shouldIgnore(player)) {
                     continue;
                 }
 
