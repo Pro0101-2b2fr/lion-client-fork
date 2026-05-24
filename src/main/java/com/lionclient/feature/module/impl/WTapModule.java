@@ -28,10 +28,18 @@ public final class WTapModule extends Module {
     private boolean releasing;
     private int lastSwingTick;
 
+    private static WTapModule instance;
+
     public WTapModule() {
         super("WTap", "Releases sprint on hit for extra knockback.", Category.COMBAT, Keyboard.KEY_NONE);
+        instance = this;
         addSetting(releaseTicks);
         addSetting(chance);
+    }
+
+    /** Returns true if WTap is currently releasing sprint (other modules should not re-press). */
+    public static boolean isReleasing() {
+        return instance != null && instance.isEnabled() && instance.releasing;
     }
 
     @Override

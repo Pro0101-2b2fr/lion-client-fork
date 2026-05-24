@@ -21,6 +21,7 @@ import com.lionclient.feature.module.impl.KillAuraModule;
 import com.lionclient.feature.module.impl.ClutchModule;
 import com.lionclient.feature.module.impl.KnockbackDelayModule;
 import com.lionclient.feature.module.impl.LegitScaffoldModule;
+import com.lionclient.feature.module.impl.NameProtectModule;
 import com.lionclient.feature.module.impl.NameTagsModule;
 import com.lionclient.feature.module.impl.NoHurtCamModule;
 import com.lionclient.feature.module.impl.PlayerEspModule;
@@ -72,6 +73,7 @@ public final class ModuleManager {
         register(ClutchModule.getInstance());
         register(new ClickRecorderModule());
         register(new ClickGuiModule());
+        register(new NameProtectModule());
         register(new PlayerEspModule());
         register(new HudModule());
         register(new ArmorHudModule());

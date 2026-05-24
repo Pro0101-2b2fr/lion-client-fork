@@ -217,7 +217,7 @@ public final class BedBreakerModule extends Module {
             double score = stack.getStrVsBlock(block);
             Item item = stack.getItem();
             if (item instanceof ItemTool) {
-                int efficiency = EnchantmentHelper.getEfficiencyModifier(player);
+                int efficiency = EnchantmentHelper.getEnchantmentLevel(32, stack);
                 if (efficiency > 0) {
                     score += efficiency * efficiency + 1.0D;
                 }

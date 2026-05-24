@@ -20,6 +20,13 @@ public final class KillAuraRotationUtils {
 
     public static final float[] serverRotations = new float[]{Float.NaN, Float.NaN};
 
+    /**
+     * Returns the shared rotation state. Prefer this over the raw array.
+     */
+    public static RotationState getRotationState() {
+        return RotationState.get();
+    }
+
     private KillAuraRotationUtils() {
     }
 

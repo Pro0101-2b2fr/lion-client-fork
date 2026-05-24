@@ -13,7 +13,8 @@
     "MixinEntityRenderer",
     "MixinEntityPlayerSP",
     "MixinMovementInputFromOptions",
-    "MixinGuiIngame"
+    "MixinGuiIngame",
+    "MixinFontRenderer"
   ],
   "injectors": {
     "defaultRequire": 1

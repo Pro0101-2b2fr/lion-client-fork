@@ -44,22 +44,23 @@ public final class SprintModule extends Module {
         }
 
         int sprintKey = minecraft.gameSettings.keyBindSprint.getKeyCode();
+
+        // Yield to WTap when it's releasing sprint.
+        if (WTapModule.isReleasing()) {
+            return;
+        }
+
         if (!shouldSprint(minecraft, player)) {
             KeyBinding.setKeyBindState(sprintKey, false);
             return;
         }
 
         if (mode.getValue() == Mode.RAGE) {
-            // Force the sprint flag on the entity directly. Reliable but
-            // visible to anticheats since you keep sprinting the moment a hit
-            // would normally cancel it. Keep this as an opt-in.
             KeyBinding.setKeyBindState(sprintKey, true);
             player.setSprinting(true);
             return;
         }
 
-        // Legit: only press the keybind, vanilla decides whether sprint
-        // actually engages (food, collisions, etc.).
         KeyBinding.setKeyBindState(sprintKey, true);
     }
 

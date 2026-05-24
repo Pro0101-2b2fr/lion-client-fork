@@ -2,6 +2,7 @@ package com.lionclient.feature.module.impl;
 
 import com.lionclient.feature.module.Category;
 import com.lionclient.feature.module.Module;
+import com.lionclient.util.EdgeDetectionHelper;
 import com.lionclient.feature.setting.BooleanSetting;
 import com.lionclient.feature.setting.NumberSetting;
 import net.minecraft.block.material.Material;
@@ -88,7 +89,7 @@ public final class LegitScaffoldModule extends Module {
             return false;
         }
 
-        double[] movement = getMovementOffset(player);
+        double[] movement = EdgeDetectionHelper.getMovementOffset(player);
         if (Math.abs(movement[0]) < 1.0E-4D && Math.abs(movement[1]) < 1.0E-4D) {
             return false;
         }
@@ -107,24 +108,10 @@ public final class LegitScaffoldModule extends Module {
         }
 
         if (Math.abs(projectedX) < 1.0E-3D && Math.abs(projectedZ) < 1.0E-3D) {
-            return isStandingOnEdge(player);
+            return EdgeDetectionHelper.isStandingOnEdge(player);
         }
 
         return isEdgeUnsafe(player, projectedX, projectedZ);
-    }
-
-    private boolean isStandingOnEdge(EntityPlayerSP player) {
-        AxisAlignedBB box = player.getEntityBoundingBox();
-        World world = Minecraft.getMinecraft().theWorld;
-        double sampleY = box.minY - 0.08D;
-        double insetX = Math.min(0.28D, (box.maxX - box.minX) * 0.5D - 0.02D);
-        double insetZ = Math.min(0.28D, (box.maxZ - box.minZ) * 0.5D - 0.02D);
-
-        boolean corner1 = hasSupport(world, player.posX + insetX, sampleY, player.posZ + insetZ);
-        boolean corner2 = hasSupport(world, player.posX + insetX, sampleY, player.posZ - insetZ);
-        boolean corner3 = hasSupport(world, player.posX - insetX, sampleY, player.posZ + insetZ);
-        boolean corner4 = hasSupport(world, player.posX - insetX, sampleY, player.posZ - insetZ);
-        return !(corner1 && corner2 && corner3 && corner4);
     }
 
     private boolean isEdgeUnsafe(EntityPlayerSP player, double offsetX, double offsetZ) {
@@ -140,32 +127,11 @@ public final class LegitScaffoldModule extends Module {
         double sideX = lateral[0] * sideReach;
         double sideZ = lateral[1] * sideReach;
 
-        boolean centerSupported = hasSupport(world, leadX, sampleY, leadZ);
-        boolean leftSupported = hasSupport(world, leadX + sideX, sampleY, leadZ + sideZ);
-        boolean rightSupported = hasSupport(world, leadX - sideX, sampleY, leadZ - sideZ);
+        boolean centerSupported = EdgeDetectionHelper.hasSupport(world, leadX, sampleY, leadZ);
+        boolean leftSupported = EdgeDetectionHelper.hasSupport(world, leadX + sideX, sampleY, leadZ + sideZ);
+        boolean rightSupported = EdgeDetectionHelper.hasSupport(world, leadX - sideX, sampleY, leadZ - sideZ);
 
         return !centerSupported || (!leftSupported && !rightSupported);
-    }
-
-    private double[] getMovementOffset(EntityPlayerSP player) {
-        float forward = player.movementInput.moveForward;
-        float strafe = player.movementInput.moveStrafe;
-        float magnitude = MathHelper.sqrt_float(forward * forward + strafe * strafe);
-        if (magnitude < 0.001F) {
-            return new double[] {0.0D, 0.0D};
-        }
-
-        forward /= magnitude;
-        strafe /= magnitude;
-
-        double yawRadians = Math.toRadians(player.rotationYaw);
-        double sin = Math.sin(yawRadians);
-        double cos = Math.cos(yawRadians);
-        double motionX = strafe * cos - forward * sin;
-        double motionZ = forward * cos + strafe * sin;
-        double horizontalMotion = Math.sqrt(player.motionX * player.motionX + player.motionZ * player.motionZ);
-        double projection = Math.max(0.24D, Math.min(0.34D, horizontalMotion + 0.08D));
-        return new double[] {motionX * projection, motionZ * projection};
     }
 
     private double[] getLateralOffset(double[] movement) {
@@ -174,15 +140,6 @@ public final class LegitScaffoldModule extends Module {
             return new double[] {1.0D, 0.0D};
         }
         return new double[] {-movement[1] / length, movement[0] / length};
-    }
-
-    private boolean hasSupport(World world, double x, double y, double z) {
-        BlockPos samplePos = new BlockPos(
-            MathHelper.floor_double(x),
-            MathHelper.floor_double(y),
-            MathHelper.floor_double(z)
-        );
-        return world.getBlockState(samplePos).getBlock().getMaterial() != Material.air;
     }
 
     private boolean shouldExtendSneakDelay(Minecraft minecraft) {
@@ -196,6 +153,6 @@ public final class LegitScaffoldModule extends Module {
 
     private void releaseSneak(int sneakKey) {
         sneakReleaseTime = 0L;
-        KeyBinding.setKeyBindState(sneakKey, false);
+        EdgeDetectionHelper.releaseSneak(sneakKey);
     }
 }

@@ -178,7 +178,7 @@ public final class AutoToolModule extends Module {
 
         Minecraft minecraft = Minecraft.getMinecraft();
         if (minecraft.thePlayer != null && item instanceof ItemTool) {
-            int efficiency = EnchantmentHelper.getEfficiencyModifier(minecraft.thePlayer);
+            int efficiency = EnchantmentHelper.getEnchantmentLevel(32, stack);
             if (efficiency > 0) {
                 base += efficiency * efficiency + 1.0D;
             }

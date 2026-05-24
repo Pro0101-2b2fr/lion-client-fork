@@ -2,6 +2,7 @@ package com.lionclient.feature.module.impl;
 
 import com.lionclient.feature.module.Category;
 import com.lionclient.feature.module.Module;
+import com.lionclient.util.EdgeDetectionHelper;
 import com.lionclient.feature.setting.BooleanSetting;
 import com.lionclient.feature.setting.NumberSetting;
 import net.minecraft.block.material.Material;
@@ -95,7 +96,7 @@ public final class EagleModule extends Module {
             return false;
         }
 
-        double[] movement = getMovementOffset(player);
+        double[] movement = EdgeDetectionHelper.getMovementOffset(player);
         if (Math.abs(movement[0]) < 1.0E-4D && Math.abs(movement[1]) < 1.0E-4D) {
             return false;
         }
@@ -120,7 +121,7 @@ public final class EagleModule extends Module {
             float forward = player.movementInput != null ? player.movementInput.moveForward : 0.0F;
             float strafe = player.movementInput != null ? player.movementInput.moveStrafe : 0.0F;
             if (Math.abs(forward) < 0.001F && Math.abs(strafe) < 0.001F) {
-                return isStandingOnEdge(player);
+                return EdgeDetectionHelper.isStandingOnEdge(player);
             }
             double yawRadians = Math.toRadians(player.rotationYaw);
             double sin = Math.sin(yawRadians);
@@ -129,31 +130,17 @@ public final class EagleModule extends Module {
             double dirZ = forward * cos + strafe * sin;
             double len = Math.sqrt(dirX * dirX + dirZ * dirZ);
             if (len < 0.001D) {
-                return isStandingOnEdge(player);
+                return EdgeDetectionHelper.isStandingOnEdge(player);
             }
             projectedX = (dirX / len) * 0.28D;
             projectedZ = (dirZ / len) * 0.28D;
         }
 
         if (Math.abs(projectedX) < 1.0E-3D && Math.abs(projectedZ) < 1.0E-3D) {
-            return isStandingOnEdge(player);
+            return EdgeDetectionHelper.isStandingOnEdge(player);
         }
 
         return isEdgeUnsafe(player, projectedX, projectedZ);
-    }
-
-    private boolean isStandingOnEdge(EntityPlayerSP player) {
-        AxisAlignedBB box = player.getEntityBoundingBox();
-        World world = Minecraft.getMinecraft().theWorld;
-        double sampleY = box.minY - 0.08D;
-        double insetX = Math.min(0.28D, (box.maxX - box.minX) * 0.5D - 0.02D);
-        double insetZ = Math.min(0.28D, (box.maxZ - box.minZ) * 0.5D - 0.02D);
-
-        boolean corner1 = hasSupport(world, player.posX + insetX, sampleY, player.posZ + insetZ);
-        boolean corner2 = hasSupport(world, player.posX + insetX, sampleY, player.posZ - insetZ);
-        boolean corner3 = hasSupport(world, player.posX - insetX, sampleY, player.posZ + insetZ);
-        boolean corner4 = hasSupport(world, player.posX - insetX, sampleY, player.posZ - insetZ);
-        return !(corner1 && corner2 && corner3 && corner4);
     }
 
     private boolean isEdgeUnsafe(EntityPlayerSP player, double offsetX, double offsetZ) {
@@ -167,15 +154,15 @@ public final class EagleModule extends Module {
         double centerX = (projectedBox.minX + projectedBox.maxX) * 0.5D;
         double centerZ = (projectedBox.minZ + projectedBox.maxZ) * 0.5D;
 
-        boolean center = hasSupport(world, centerX, sampleY, centerZ);
+        boolean center = EdgeDetectionHelper.hasSupport(world, centerX, sampleY, centerZ);
         // If center still has support, only sneak if ALL corners are gone
         // (about to fall off completely). This prevents premature sneak in
         // diagonal where 1-2 corners overshoot but the player is still safe.
         if (center) {
-            boolean corner1 = hasSupport(world, centerX + insetX, sampleY, centerZ + insetZ);
-            boolean corner2 = hasSupport(world, centerX + insetX, sampleY, centerZ - insetZ);
-            boolean corner3 = hasSupport(world, centerX - insetX, sampleY, centerZ + insetZ);
-            boolean corner4 = hasSupport(world, centerX - insetX, sampleY, centerZ - insetZ);
+            boolean corner1 = EdgeDetectionHelper.hasSupport(world, centerX + insetX, sampleY, centerZ + insetZ);
+            boolean corner2 = EdgeDetectionHelper.hasSupport(world, centerX + insetX, sampleY, centerZ - insetZ);
+            boolean corner3 = EdgeDetectionHelper.hasSupport(world, centerX - insetX, sampleY, centerZ + insetZ);
+            boolean corner4 = EdgeDetectionHelper.hasSupport(world, centerX - insetX, sampleY, centerZ - insetZ);
             int unsupported = 0;
             if (!corner1) unsupported++;
             if (!corner2) unsupported++;
@@ -187,36 +174,6 @@ public final class EagleModule extends Module {
         return true;
     }
 
-    private double[] getMovementOffset(EntityPlayerSP player) {
-        float forward = player.movementInput.moveForward;
-        float strafe = player.movementInput.moveStrafe;
-        float magnitude = MathHelper.sqrt_float(forward * forward + strafe * strafe);
-        if (magnitude < 0.001F) {
-            return new double[]{0.0D, 0.0D};
-        }
-
-        forward /= magnitude;
-        strafe /= magnitude;
-
-        double yawRadians = Math.toRadians(player.rotationYaw);
-        double sin = Math.sin(yawRadians);
-        double cos = Math.cos(yawRadians);
-        double motionX = strafe * cos - forward * sin;
-        double motionZ = forward * cos + strafe * sin;
-        double horizontalMotion = Math.sqrt(player.motionX * player.motionX + player.motionZ * player.motionZ);
-        double projection = Math.max(0.24D, Math.min(0.34D, horizontalMotion + 0.08D));
-        return new double[]{motionX * projection, motionZ * projection};
-    }
-
-    private boolean hasSupport(World world, double x, double y, double z) {
-        BlockPos samplePos = new BlockPos(
-            MathHelper.floor_double(x),
-            MathHelper.floor_double(y),
-            MathHelper.floor_double(z)
-        );
-        return world.getBlockState(samplePos).getBlock().getMaterial() != Material.air;
-    }
-
     private boolean isHoldingBlock(EntityPlayerSP player) {
         ItemStack held = player.getHeldItem();
         return held != null && held.getItem() instanceof ItemBlock;
@@ -224,6 +181,6 @@ public final class EagleModule extends Module {
 
     private void releaseSneak(int sneakKey) {
         sneakReleaseTime = 0L;
-        KeyBinding.setKeyBindState(sneakKey, false);
+        EdgeDetectionHelper.releaseSneak(sneakKey);
     }
 }

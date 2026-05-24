@@ -314,6 +314,17 @@ public final class KillAuraModule extends Module {
         int switchDelayTicks = Math.max(1, switchDelay.getValue() / 50);
         long noHitTicks = (long) Math.min(attackTargets.size(), targets.getValue()) * switchDelayTicks;
 
+        // Purge stale entries to prevent unbounded growth.
+        if (hitMap.size() > 50) {
+            java.util.Iterator<java.util.Map.Entry<Integer, Integer>> it = hitMap.entrySet().iterator();
+            while (it.hasNext()) {
+                java.util.Map.Entry<Integer, Integer> entry = it.next();
+                if (ticksExisted - entry.getValue().intValue() > switchDelayTicks * 10) {
+                    it.remove();
+                }
+            }
+        }
+
         for (KillAuraTarget candidate : attackTargets) {
             Integer firstHitTick = hitMap.get(Integer.valueOf(candidate.entityId));
             if (firstHitTick == null || ticksExisted - firstHitTick.intValue() >= switchDelayTicks) {

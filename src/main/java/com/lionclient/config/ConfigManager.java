@@ -23,7 +23,6 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
-import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
@@ -193,7 +192,8 @@ public final class ConfigManager {
             currentConfigName = name;
             persistCurrentConfigName();
             moduleManager.refreshConfigModule();
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            System.err.println("[LionClient] Failed to load config '" + name + "': " + e.getMessage());
         } finally {
             suppressSave = false;
         }
@@ -251,13 +251,15 @@ public final class ConfigManager {
 
         root.add("modules", modulesJson);
         try {
-            Writer writer = new OutputStreamWriter(new FileOutputStream(file), StandardCharsets.UTF_8);
+            OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream(file), StandardCharsets.UTF_8);
             try {
                 GSON.toJson(root, writer);
+                writer.flush();
             } finally {
                 writer.close();
             }
-        } catch (IOException ignored) {
+        } catch (IOException e) {
+            System.err.println("[LionClient] Failed to save config '" + name + "': " + e.getMessage());
         }
     }
 
