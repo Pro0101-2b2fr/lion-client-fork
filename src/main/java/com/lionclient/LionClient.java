@@ -2,7 +2,6 @@ package com.lionclient;
 
 import com.lionclient.feature.module.ModuleManager;
 import com.lionclient.feature.module.impl.ClickGuiModule;
-import com.lionclient.feature.module.impl.HudModule;
 import com.lionclient.gui.ClickGuiScreen;
 import com.lionclient.gui.HudEditorScreen;
 import com.lionclient.gui.ModernClickGuiScreen;
@@ -107,12 +106,7 @@ public final class LionClient {
     }
 
     public void openHudEditor() {
-        HudModule hudModule = HudModule.getInstance();
-        if (hudModule == null) {
-            return;
-        }
-
-        Minecraft.getMinecraft().displayGuiScreen(new HudEditorScreen(hudModule));
+        Minecraft.getMinecraft().displayGuiScreen(new HudEditorScreen(moduleManager));
     }
 
     @SubscribeEvent

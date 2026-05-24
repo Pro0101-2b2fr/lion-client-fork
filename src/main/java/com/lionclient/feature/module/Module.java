@@ -85,6 +85,8 @@ public abstract class Module {
 
     public void toggle() {
         setEnabled(!enabled);
+        playToggleSound();
+        showToggleNotification();
     }
 
     public void setEnabled(boolean enabled) {
@@ -173,5 +175,24 @@ public abstract class Module {
 
     public boolean consumeInboundFlushRequest() {
         return consumeFlushRequest();
+    }
+
+    private void playToggleSound() {
+        net.minecraft.client.Minecraft minecraft = net.minecraft.client.Minecraft.getMinecraft();
+        if (minecraft.thePlayer == null || minecraft.theWorld == null) {
+            return;
+        }
+        float pitch = enabled ? 1.5F : 0.8F;
+        minecraft.thePlayer.playSound("random.click", 0.4F, pitch);
+    }
+
+    private void showToggleNotification() {
+        net.minecraft.client.Minecraft minecraft = net.minecraft.client.Minecraft.getMinecraft();
+        if (minecraft.thePlayer == null) {
+            return;
+        }
+        String prefix = enabled ? "\u00a7a+ " : "\u00a7c- ";
+        String message = "\u00a78[\u00a7bLion\u00a78] " + prefix + "\u00a7f" + name;
+        minecraft.thePlayer.addChatMessage(new net.minecraft.util.ChatComponentText(message));
     }
 }

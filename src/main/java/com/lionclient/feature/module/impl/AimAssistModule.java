@@ -6,6 +6,7 @@ import com.lionclient.feature.module.Module;
 import com.lionclient.feature.setting.BooleanSetting;
 import com.lionclient.feature.setting.DecimalSetting;
 import com.lionclient.feature.setting.NumberSetting;
+import com.lionclient.util.MouseGcdHelper;
 import net.minecraft.client.Minecraft;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.init.Items;
@@ -72,7 +73,11 @@ public final class AimAssistModule extends Module {
 
         float frameFactor = consumeFrameFactor();
         float[] smoothed = applyLinearSmoothing(currentYaw, currentPitch, target.yaw, target.pitch, frameFactor);
-        applyClientRotations(minecraft, smoothed[0], smoothed[1]);
+        float[] snapped = MouseGcdHelper.snapAbsolute(currentYaw, currentPitch, smoothed[0], smoothed[1]);
+        if (snapped[0] == currentYaw && snapped[1] == currentPitch) {
+            return;
+        }
+        applyClientRotations(minecraft, snapped[0], snapped[1]);
     }
 
     private AimTarget findTarget(Minecraft minecraft, float baseYaw, float basePitch) {
@@ -168,14 +173,8 @@ public final class AimAssistModule extends Module {
     }
 
     private void applyClientRotations(Minecraft minecraft, float yaw, float pitch) {
-        minecraft.thePlayer.prevRotationYaw = minecraft.thePlayer.rotationYaw;
-        minecraft.thePlayer.prevRotationPitch = minecraft.thePlayer.rotationPitch;
-        minecraft.thePlayer.prevRotationYawHead = minecraft.thePlayer.rotationYawHead;
-        minecraft.thePlayer.prevRenderYawOffset = minecraft.thePlayer.renderYawOffset;
         minecraft.thePlayer.rotationYaw = yaw;
         minecraft.thePlayer.rotationPitch = pitch;
-        minecraft.thePlayer.rotationYawHead = yaw;
-        minecraft.thePlayer.renderYawOffset = yaw;
     }
 
     private float[] applyLinearSmoothing(float currentYaw, float currentPitch, float targetYaw, float targetPitch, float frameFactor) {

@@ -7,6 +7,7 @@ import com.lionclient.feature.module.ModuleManager;
 import com.lionclient.feature.module.impl.ClickGuiModule;
 import com.lionclient.feature.setting.ActionSetting;
 import com.lionclient.feature.setting.BooleanSetting;
+import com.lionclient.feature.setting.ColorSetting;
 import com.lionclient.feature.setting.DecimalSetting;
 import com.lionclient.feature.setting.EnumSetting;
 import com.lionclient.feature.setting.IntRangeSetting;
@@ -25,6 +26,9 @@ import net.minecraft.client.gui.GuiScreen;
 import net.minecraft.client.gui.GuiTextField;
 import net.minecraft.client.gui.ScaledResolution;
 import net.minecraft.client.renderer.GlStateManager;
+import net.minecraft.client.renderer.Tessellator;
+import net.minecraft.client.renderer.WorldRenderer;
+import net.minecraft.client.renderer.vertex.DefaultVertexFormats;
 import org.lwjgl.input.Keyboard;
 import org.lwjgl.input.Mouse;
 import org.lwjgl.opengl.GL11;
@@ -90,6 +94,8 @@ public final class ModernClickGuiScreen extends GuiScreen {
     private Module previousModule;
     private Module bindingModule;
     private EnumSetting<?> expandedEnumSetting;
+    private ColorSetting expandedColorSetting;
+    private ColorPickerDragMode colorDragMode = ColorPickerDragMode.NONE;
     private Setting draggingSetting;
     private boolean draggingRangeHigh;
     private Setting editingValueSetting;
@@ -241,6 +247,27 @@ public final class ModernClickGuiScreen extends GuiScreen {
         }
         draggingSetting = null;
         draggingRangeHigh = false;
+        colorDragMode = ColorPickerDragMode.NONE;
+    }
+
+    @Override
+    protected void mouseClickMove(int mouseX, int mouseY, int clickedMouseButton, long timeSinceLastClick) {
+        super.mouseClickMove(mouseX, mouseY, clickedMouseButton, timeSinceLastClick);
+        if (clickedMouseButton == 0 && expandedColorSetting != null && colorDragMode != ColorPickerDragMode.NONE) {
+            Layout layout = createLayout();
+            int rowY = layout.settingsContentTop - Math.round(settingsScroll);
+            for (Setting setting : getVisibleSettings(selectedModule)) {
+                int rowHeight = getSettingHeight(setting);
+                if (setting == expandedColorSetting) {
+                    Bounds rowBounds = new Bounds(layout.settingsPaneX + 10, rowY, layout.settingsPaneRight - 10, rowY + rowHeight);
+                    Bounds chipBounds = getColorChipBounds(rowBounds);
+                    Bounds popupBounds = getColorPopupBounds(layout, chipBounds);
+                    applyColorPickerDrag(popupBounds, mouseX, mouseY);
+                    return;
+                }
+                rowY += rowHeight + SETTING_ROW_GAP;
+            }
+        }
     }
 
     @Override
@@ -411,11 +438,15 @@ public final class ModernClickGuiScreen extends GuiScreen {
     private boolean handleSettingClick(Layout layout, int mouseX, int mouseY, int mouseButton) {
         if (selectedModule == null || !layout.settingsScrollBounds.contains(mouseX, mouseY)) {
             expandedEnumSetting = null;
+            expandedColorSetting = null;
             return false;
         }
 
         List<Setting> visibleSettings = getVisibleSettings(selectedModule);
         if (handleExpandedEnumClick(layout, visibleSettings, mouseX, mouseY, mouseButton)) {
+            return true;
+        }
+        if (handleExpandedColorClick(layout, visibleSettings, mouseX, mouseY, mouseButton)) {
             return true;
         }
 
@@ -426,17 +457,26 @@ public final class ModernClickGuiScreen extends GuiScreen {
             if (rowBounds.contains(mouseX, mouseY)) {
                 if (setting instanceof BooleanSetting && mouseButton == 0) {
                     expandedEnumSetting = null;
+                    expandedColorSetting = null;
                     ((BooleanSetting) setting).toggle();
                     return true;
                 }
 
                 if (setting instanceof EnumSetting && mouseButton == 0) {
+                    expandedColorSetting = null;
                     expandedEnumSetting = expandedEnumSetting == setting ? null : (EnumSetting<?>) setting;
+                    return true;
+                }
+
+                if (setting instanceof ColorSetting && mouseButton == 0) {
+                    expandedEnumSetting = null;
+                    expandedColorSetting = expandedColorSetting == setting ? null : (ColorSetting) setting;
                     return true;
                 }
 
                 if (setting instanceof ActionSetting && mouseButton == 0) {
                     expandedEnumSetting = null;
+                    expandedColorSetting = null;
                     ((ActionSetting) setting).run();
                     ensureSelection();
                     return true;
@@ -446,6 +486,7 @@ public final class ModernClickGuiScreen extends GuiScreen {
                     Bounds sliderBounds = getSliderBounds(rowBounds);
                     if (sliderBounds.contains(mouseX, mouseY) || rowBounds.contains(mouseX, mouseY)) {
                         expandedEnumSetting = null;
+                        expandedColorSetting = null;
                         clearValueEditor();
                         draggingSetting = setting;
                         draggingRangeHigh = chooseRangeSliderHandle((IntRangeSetting) setting, mouseX, sliderBounds);
@@ -458,6 +499,7 @@ public final class ModernClickGuiScreen extends GuiScreen {
                     Bounds valueBounds = getValueInputBounds(rowBounds);
                     if (valueBounds.contains(mouseX, mouseY)) {
                         expandedEnumSetting = null;
+                        expandedColorSetting = null;
                         draggingSetting = null;
                         openValueEditor(setting, valueBounds);
                         return true;
@@ -466,6 +508,7 @@ public final class ModernClickGuiScreen extends GuiScreen {
                     Bounds sliderBounds = getSliderBounds(rowBounds);
                     if (sliderBounds.contains(mouseX, mouseY) || rowBounds.contains(mouseX, mouseY)) {
                         expandedEnumSetting = null;
+                        expandedColorSetting = null;
                         clearValueEditor();
                         draggingSetting = setting;
                         applySliderValue(setting, mouseX, sliderBounds, false);
@@ -716,6 +759,7 @@ public final class ModernClickGuiScreen extends GuiScreen {
         }
         if (interactive) {
             drawExpandedEnumPopup(layout, visibleSettings, mouseX, mouseY, accent);
+            drawExpandedColorPopup(layout, visibleSettings, accent);
         }
         GlStateManager.popMatrix();
         endScissor();
@@ -831,6 +875,29 @@ public final class ModernClickGuiScreen extends GuiScreen {
             );
             this.fontRendererObj.drawString(enumSetting.getValueText(), chipBounds.left + 8, chipBounds.top + (chipBounds.getHeight() - this.fontRendererObj.FONT_HEIGHT) / 2, scaleAlpha(TEXT_PRIMARY, alphaScale));
             this.fontRendererObj.drawString("≡", chipBounds.right - 12 - this.fontRendererObj.getStringWidth("≡"), chipBounds.top + (chipBounds.getHeight() - this.fontRendererObj.FONT_HEIGHT) / 2, TEXT_SECONDARY);
+            return;
+        }
+
+        if (setting instanceof ColorSetting) {
+            ColorSetting colorSetting = (ColorSetting) setting;
+            Bounds chipBounds = getColorChipBounds(rowBounds);
+            drawScaledText(setting.getName(), rowBounds.left + CONTROL_PADDING, rowBounds.top + 6, scaleAlpha(SMALL_LABEL_COLOR, alphaScale), SMALL_LABEL_SCALE);
+            Gui.drawRect(chipBounds.left, chipBounds.top, chipBounds.right, chipBounds.bottom, scaleAlpha(0xFF000000 | CONTROL_BACKGROUND, alphaScale));
+            int swatch = chipBounds.left + 6;
+            int swatchSize = chipBounds.getHeight() - 8;
+            int swatchTop = chipBounds.top + 4;
+            Gui.drawRect(swatch, swatchTop, swatch + swatchSize, swatchTop + swatchSize, 0xFF000000 | (colorSetting.getRgb()));
+            drawOutline(swatch, swatchTop, swatch + swatchSize, swatchTop + swatchSize, scaleAlpha(0xFF000000 | CONTROL_BORDER_LIGHT, alphaScale));
+            drawRoundedOutline(
+                chipBounds.left,
+                chipBounds.top,
+                chipBounds.right,
+                chipBounds.bottom,
+                4.0F,
+                scaleAlpha(expandedColorSetting == setting ? withAlpha(accent, 180) : 0xFF000000 | CONTROL_BORDER, alphaScale)
+            );
+            String label = colorSetting.getValueText();
+            this.fontRendererObj.drawString(label, swatch + swatchSize + 8, chipBounds.top + (chipBounds.getHeight() - this.fontRendererObj.FONT_HEIGHT) / 2, scaleAlpha(TEXT_PRIMARY, alphaScale));
             return;
         }
 
@@ -973,6 +1040,164 @@ public final class ModernClickGuiScreen extends GuiScreen {
         expandedEnumSetting = null;
     }
 
+    private boolean handleExpandedColorClick(Layout layout, List<Setting> visibleSettings, int mouseX, int mouseY, int mouseButton) {
+        if (expandedColorSetting == null || mouseButton != 0) {
+            return false;
+        }
+
+        int rowY = layout.settingsContentTop - Math.round(settingsScroll);
+        for (Setting setting : visibleSettings) {
+            int rowHeight = getSettingHeight(setting);
+            Bounds rowBounds = new Bounds(layout.settingsPaneX + 10, rowY, layout.settingsPaneRight - 10, rowY + rowHeight);
+            if (setting == expandedColorSetting) {
+                Bounds chipBounds = getColorChipBounds(rowBounds);
+                Bounds popupBounds = getColorPopupBounds(layout, chipBounds);
+                if (!popupBounds.contains(mouseX, mouseY)) {
+                    return false;
+                }
+
+                Bounds hueBar = getColorHueBarBounds(popupBounds);
+                Bounds square = getColorSquareBounds(popupBounds);
+                if (hueBar.contains(mouseX, mouseY)) {
+                    colorDragMode = ColorPickerDragMode.HUE;
+                    applyColorPickerDrag(popupBounds, mouseX, mouseY);
+                } else if (square.contains(mouseX, mouseY)) {
+                    colorDragMode = ColorPickerDragMode.SV;
+                    applyColorPickerDrag(popupBounds, mouseX, mouseY);
+                }
+                return true;
+            }
+            rowY += rowHeight + SETTING_ROW_GAP;
+        }
+
+        expandedColorSetting = null;
+        return false;
+    }
+
+    private void drawExpandedColorPopup(Layout layout, List<Setting> visibleSettings, int accent) {
+        if (expandedColorSetting == null) {
+            return;
+        }
+
+        int rowY = layout.settingsContentTop - Math.round(settingsScroll);
+        for (Setting setting : visibleSettings) {
+            int rowHeight = getSettingHeight(setting);
+            Bounds rowBounds = new Bounds(layout.settingsPaneX + 10, rowY, layout.settingsPaneRight - 10, rowY + rowHeight);
+            if (setting == expandedColorSetting) {
+                Bounds chipBounds = getColorChipBounds(rowBounds);
+                Bounds popupBounds = getColorPopupBounds(layout, chipBounds);
+                Gui.drawRect(popupBounds.left, popupBounds.top, popupBounds.right, popupBounds.bottom, 0xFF1C2129);
+                drawRoundedOutline(popupBounds.left, popupBounds.top, popupBounds.right, popupBounds.bottom, 4.0F, 0xFF000000 | CONTROL_BORDER);
+                drawColorPicker((ColorSetting) setting, popupBounds);
+                return;
+            }
+            rowY += rowHeight + SETTING_ROW_GAP;
+        }
+
+        expandedColorSetting = null;
+    }
+
+    private void applyColorPickerDrag(Bounds popupBounds, int mouseX, int mouseY) {
+        if (expandedColorSetting == null || colorDragMode == ColorPickerDragMode.NONE) {
+            return;
+        }
+
+        if (colorDragMode == ColorPickerDragMode.HUE) {
+            Bounds hueBar = getColorHueBarBounds(popupBounds);
+            float hue = clamp((mouseX - hueBar.left) / (float) hueBar.getWidth(), 0.0F, 1.0F);
+            expandedColorSetting.setHsva(hue, expandedColorSetting.getSaturation(), expandedColorSetting.getValue(), expandedColorSetting.getAlpha());
+            return;
+        }
+
+        Bounds square = getColorSquareBounds(popupBounds);
+        float saturation = clamp((mouseX - square.left) / (float) square.getWidth(), 0.0F, 1.0F);
+        float value = clamp(1.0F - (mouseY - square.top) / (float) square.getHeight(), 0.0F, 1.0F);
+        expandedColorSetting.setHsva(expandedColorSetting.getHue(), saturation, value, expandedColorSetting.getAlpha());
+    }
+
+    private void drawColorPicker(ColorSetting setting, Bounds popupBounds) {
+        Bounds hueBar = getColorHueBarBounds(popupBounds);
+        Bounds square = getColorSquareBounds(popupBounds);
+
+        GlStateManager.disableTexture2D();
+        GlStateManager.enableBlend();
+        GlStateManager.tryBlendFuncSeparate(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA, 1, 0);
+        GlStateManager.shadeModel(GL11.GL_SMOOTH);
+
+        // Hue bar - 6 segments (red, yellow, green, cyan, blue, magenta, red)
+        Tessellator tessellator = Tessellator.getInstance();
+        WorldRenderer renderer = tessellator.getWorldRenderer();
+        int segments = 6;
+        float segmentWidth = hueBar.getWidth() / (float) segments;
+        renderer.begin(GL11.GL_QUADS, DefaultVertexFormats.POSITION_COLOR);
+        for (int i = 0; i < segments; i++) {
+            float leftX = hueBar.left + segmentWidth * i;
+            float rightX = hueBar.left + segmentWidth * (i + 1);
+            int leftRgb = ColorSetting.hsvaToArgb(i / (float) segments, 1.0F, 1.0F, 1.0F);
+            int rightRgb = ColorSetting.hsvaToArgb((i + 1) / (float) segments, 1.0F, 1.0F, 1.0F);
+            float lr = ((leftRgb >> 16) & 0xFF) / 255.0F;
+            float lg = ((leftRgb >> 8) & 0xFF) / 255.0F;
+            float lb = (leftRgb & 0xFF) / 255.0F;
+            float rr = ((rightRgb >> 16) & 0xFF) / 255.0F;
+            float rg = ((rightRgb >> 8) & 0xFF) / 255.0F;
+            float rb = (rightRgb & 0xFF) / 255.0F;
+            renderer.pos(leftX, hueBar.top, 0.0D).color(lr, lg, lb, 1.0F).endVertex();
+            renderer.pos(leftX, hueBar.bottom, 0.0D).color(lr, lg, lb, 1.0F).endVertex();
+            renderer.pos(rightX, hueBar.bottom, 0.0D).color(rr, rg, rb, 1.0F).endVertex();
+            renderer.pos(rightX, hueBar.top, 0.0D).color(rr, rg, rb, 1.0F).endVertex();
+        }
+        tessellator.draw();
+
+        // S/V square — saturation horizontally, value vertically
+        int hueRgb = ColorSetting.hsvaToArgb(setting.getHue(), 1.0F, 1.0F, 1.0F) & 0x00FFFFFF;
+        float hr = ((hueRgb >> 16) & 0xFF) / 255.0F;
+        float hg = ((hueRgb >> 8) & 0xFF) / 255.0F;
+        float hb = (hueRgb & 0xFF) / 255.0F;
+
+        // 1) White-to-hue horizontal gradient
+        renderer.begin(GL11.GL_QUADS, DefaultVertexFormats.POSITION_COLOR);
+        renderer.pos(square.left, square.top, 0.0D).color(1.0F, 1.0F, 1.0F, 1.0F).endVertex();
+        renderer.pos(square.left, square.bottom, 0.0D).color(1.0F, 1.0F, 1.0F, 1.0F).endVertex();
+        renderer.pos(square.right, square.bottom, 0.0D).color(hr, hg, hb, 1.0F).endVertex();
+        renderer.pos(square.right, square.top, 0.0D).color(hr, hg, hb, 1.0F).endVertex();
+        tessellator.draw();
+
+        // 2) Transparent-to-black overlay for the value axis
+        renderer.begin(GL11.GL_QUADS, DefaultVertexFormats.POSITION_COLOR);
+        renderer.pos(square.left, square.top, 0.0D).color(0.0F, 0.0F, 0.0F, 0.0F).endVertex();
+        renderer.pos(square.left, square.bottom, 0.0D).color(0.0F, 0.0F, 0.0F, 1.0F).endVertex();
+        renderer.pos(square.right, square.bottom, 0.0D).color(0.0F, 0.0F, 0.0F, 1.0F).endVertex();
+        renderer.pos(square.right, square.top, 0.0D).color(0.0F, 0.0F, 0.0F, 0.0F).endVertex();
+        tessellator.draw();
+
+        GlStateManager.shadeModel(GL11.GL_FLAT);
+        GlStateManager.disableBlend();
+        GlStateManager.enableTexture2D();
+        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+
+        // Hue bar marker
+        int hueX = Math.round(hueBar.left + setting.getHue() * hueBar.getWidth());
+        Gui.drawRect(hueX - 2, hueBar.top - 2, hueX + 2, hueBar.bottom + 2, 0xFF000000);
+        Gui.drawRect(hueX - 1, hueBar.top - 1, hueX + 1, hueBar.bottom + 1, 0xFFFFFFFF);
+
+        // S/V marker
+        int svX = Math.round(square.left + setting.getSaturation() * square.getWidth());
+        int svY = Math.round(square.top + (1.0F - setting.getValue()) * square.getHeight());
+        Gui.drawRect(svX - 3, svY - 3, svX + 3, svY + 3, 0xFF000000);
+        Gui.drawRect(svX - 2, svY - 2, svX + 2, svY + 2, 0xFFFFFFFF);
+
+        // Preview swatch + hex label
+        int previewTop = square.bottom + 6;
+        int previewBottom = previewTop + 14;
+        int previewLeft = square.left;
+        int previewRight = square.right;
+        Gui.drawRect(previewLeft, previewTop, previewRight, previewBottom, 0xFF000000 | setting.getRgb());
+        drawOutline(previewLeft, previewTop, previewRight, previewBottom, 0xFF000000 | CONTROL_BORDER_LIGHT);
+        String hex = setting.getValueText();
+        int hexX = previewLeft + (previewRight - previewLeft - this.fontRendererObj.getStringWidth(hex)) / 2;
+        this.fontRendererObj.drawStringWithShadow(hex, hexX, previewTop + (14 - this.fontRendererObj.FONT_HEIGHT) / 2 + 1, 0xFFFFFFFF);
+    }
+
     private boolean chooseRangeSliderHandle(IntRangeSetting setting, int mouseX, Bounds sliderBounds) {
         float progress = clamp((mouseX - sliderBounds.left) / (float) sliderBounds.getWidth(), 0.0F, 1.0F);
         float clickValue = setting.getMin() + progress * (setting.getMax() - setting.getMin());
@@ -1083,6 +1308,9 @@ public final class ModernClickGuiScreen extends GuiScreen {
             return 44;
         }
         if (setting instanceof IntRangeSetting || setting instanceof NumberSetting || setting instanceof DecimalSetting) {
+            return 44;
+        }
+        if (setting instanceof ColorSetting) {
             return 44;
         }
         return 34;
@@ -1201,6 +1429,44 @@ public final class ModernClickGuiScreen extends GuiScreen {
         int chipWidth = Math.min(CONTROL_WIDTH, rowBounds.getWidth() - (CONTROL_PADDING * 2));
         int top = rowBounds.top + 14;
         return new Bounds(rowBounds.left + CONTROL_PADDING, top, rowBounds.left + CONTROL_PADDING + chipWidth, top + CONTROL_HEIGHT);
+    }
+
+    private Bounds getColorChipBounds(Bounds rowBounds) {
+        int chipWidth = Math.min(CONTROL_WIDTH, rowBounds.getWidth() - (CONTROL_PADDING * 2));
+        int top = rowBounds.top + 14;
+        return new Bounds(rowBounds.left + CONTROL_PADDING, top, rowBounds.left + CONTROL_PADDING + chipWidth, top + CONTROL_HEIGHT);
+    }
+
+    private Bounds getColorPopupBounds(Layout layout, Bounds chipBounds) {
+        int popupWidth = Math.max(chipBounds.getWidth(), 178);
+        int popupHeight = 168;
+        int popupTop = chipBounds.bottom + 4;
+        if (popupTop + popupHeight > layout.settingsScrollBounds.bottom) {
+            popupTop = chipBounds.top - 4 - popupHeight;
+        }
+        popupTop = Math.max(layout.settingsScrollBounds.top, popupTop);
+        return new Bounds(chipBounds.left, popupTop, chipBounds.left + popupWidth, popupTop + popupHeight);
+    }
+
+    private Bounds getColorHueBarBounds(Bounds popupBounds) {
+        int left = popupBounds.left + 10;
+        int right = popupBounds.right - 10;
+        int top = popupBounds.top + 10;
+        return new Bounds(left, top, right, top + 12);
+    }
+
+    private Bounds getColorSquareBounds(Bounds popupBounds) {
+        Bounds hueBar = getColorHueBarBounds(popupBounds);
+        int left = hueBar.left;
+        int right = hueBar.right;
+        int top = hueBar.bottom + 8;
+        int bottom = popupBounds.bottom - 28;
+        return new Bounds(left, top, right, bottom);
+    }
+
+    private Bounds getColorWheelBounds(Bounds popupBounds) {
+        // Kept for backward compatibility; not used by the new layout.
+        return getColorSquareBounds(popupBounds);
     }
 
     private Bounds getEnumPopupBounds(Layout layout, Bounds chipBounds, EnumSetting<?> setting) {
@@ -1620,6 +1886,8 @@ public final class ModernClickGuiScreen extends GuiScreen {
             return windowRight - windowX;
         }
     }
+
+    private enum ColorPickerDragMode { NONE, HUE, SV }
 
     private static final class Bounds {
         private final int left;

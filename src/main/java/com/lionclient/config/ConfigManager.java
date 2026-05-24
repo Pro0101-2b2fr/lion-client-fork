@@ -12,6 +12,7 @@ import com.lionclient.feature.module.ModuleManager;
 import com.lionclient.feature.module.impl.ClickPatternStore;
 import com.lionclient.feature.setting.ActionSetting;
 import com.lionclient.feature.setting.BooleanSetting;
+import com.lionclient.feature.setting.ColorSetting;
 import com.lionclient.feature.setting.DecimalSetting;
 import com.lionclient.feature.setting.EnumSetting;
 import com.lionclient.feature.setting.IntRangeSetting;
@@ -183,6 +184,8 @@ public final class ConfigManager {
                         ((NumberSetting) setting).setManualValue(value.getAsInt());
                     } else if (setting instanceof EnumSetting) {
                         ((EnumSetting<?>) setting).setValueByName(value.getAsString());
+                    } else if (setting instanceof ColorSetting) {
+                        ((ColorSetting) setting).setArgbNoSave(value.getAsInt());
                     }
                 }
             }
@@ -237,6 +240,8 @@ public final class ConfigManager {
                     settingsJson.addProperty(setting.getName(), ((NumberSetting) setting).getValue());
                 } else if (setting instanceof EnumSetting) {
                     settingsJson.addProperty(setting.getName(), ((EnumSetting<?>) setting).getValue().name());
+                } else if (setting instanceof ColorSetting) {
+                    settingsJson.addProperty(setting.getName(), ((ColorSetting) setting).getArgb());
                 }
             }
 

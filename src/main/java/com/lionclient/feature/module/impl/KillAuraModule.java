@@ -423,10 +423,10 @@ public final class KillAuraModule extends Module {
     }
 
     private long nextDelay() {
-        int cps = Math.max(1, (int) targetCps.getValue());
-        int baseDelay = 1000 / cps;
-        int finalDelay = baseDelay + (random.nextInt(21) - 10);
-        return Math.max(33, Math.min(180, finalDelay));
+        double cpsValue = Math.max(1.0D, targetCps.getValue());
+        double baseDelay = 1000.0D / cpsValue;
+        double variation = (random.nextDouble() - 0.5D) * 22.0D;
+        return Math.max(33L, Math.min(180L, Math.round(baseDelay + variation)));
     }
 
     private void setTarget(Entity entity) {

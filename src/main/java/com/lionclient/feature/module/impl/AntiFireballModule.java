@@ -368,10 +368,15 @@ public final class AntiFireballModule extends Module {
     }
 
     private long nextDelay() {
-        int cps = Math.max(1, (int) targetCps.getValue());
-        int baseDelay = 1000 / cps;
-        int variation = random.nextInt(Math.max(1, baseDelay / 3 + 1)) - baseDelay / 6;
-        return Math.max(33, baseDelay + variation);
+        // DecimalSetting ranges from 1.0 to 20.0 in 0.5 steps, but the
+        // previous implementation truncated to int and lost the fractional
+        // CPS. Use the rounded value with a wider variation window to keep
+        // a usable spread.
+        double cpsValue = Math.max(1.0D, targetCps.getValue());
+        double baseDelay = 1000.0D / cpsValue;
+        double variation = (random.nextDouble() - 0.5D) * baseDelay * 0.4D;
+        long delay = Math.round(baseDelay + variation);
+        return Math.max(33L, delay);
     }
 
     private float resolveBaseYaw(Minecraft minecraft) {

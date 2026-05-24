@@ -3,8 +3,8 @@ package com.lionclient.feature.module.impl;
 import com.lionclient.feature.module.Category;
 import com.lionclient.feature.module.Module;
 import com.lionclient.feature.setting.BooleanSetting;
+import com.lionclient.feature.setting.ColorSetting;
 import com.lionclient.feature.setting.EnumSetting;
-import com.lionclient.feature.setting.NumberSetting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.entity.player.EntityPlayer;
@@ -15,36 +15,22 @@ import org.lwjgl.opengl.GL11;
 
 public final class PlayerEspModule extends Module {
     private final EnumSetting<Mode> mode = new EnumSetting<Mode>("Mode", Mode.values(), Mode.MODERN);
-    private final NumberSetting red = new NumberSetting("Red", 0, 255, 5, 255);
-    private final NumberSetting green = new NumberSetting("Green", 0, 255, 5, 60);
-    private final NumberSetting blue = new NumberSetting("Blue", 0, 255, 5, 60);
+    private final ColorSetting classicColor = new ColorSetting("Classic Color", 0xFFFF3C3C);
     private final BooleanSetting seeInvis = new BooleanSetting("See Invis", false);
+    private final BooleanSetting showHealth = new BooleanSetting("Show Health", true);
 
     public PlayerEspModule() {
         super("PlayerESP", "Draws a box around other players trough walls.", Category.RENDER, Keyboard.KEY_NONE);
-        red.setVisibility(new java.util.function.BooleanSupplier() {
-            @Override
-            public boolean getAsBoolean() {
-                return mode.getValue() == Mode.CLASSIC;
-            }
-        });
-        green.setVisibility(new java.util.function.BooleanSupplier() {
-            @Override
-            public boolean getAsBoolean() {
-                return mode.getValue() == Mode.CLASSIC;
-            }
-        });
-        blue.setVisibility(new java.util.function.BooleanSupplier() {
+        classicColor.setVisibility(new java.util.function.BooleanSupplier() {
             @Override
             public boolean getAsBoolean() {
                 return mode.getValue() == Mode.CLASSIC;
             }
         });
         addSetting(mode);
-        addSetting(red);
-        addSetting(green);
-        addSetting(blue);
+        addSetting(classicColor);
         addSetting(seeInvis);
+        addSetting(showHealth);
     }
 
     @Override
@@ -101,6 +87,10 @@ public final class PlayerEspModule extends Module {
                     drawFilledBox(renderBox, colors[0], colors[1], colors[2], 0.12F);
                 }
                 drawOutlinedBox(renderBox, colors[0], colors[1], colors[2], modern ? 0.95F : 1.0F);
+
+                if (showHealth.isEnabled()) {
+                    drawHealthBar(renderBox, player.getHealth(), player.getMaxHealth());
+                }
             }
         } finally {
             GL11.glLineWidth(1.0F);
@@ -114,6 +104,32 @@ public final class PlayerEspModule extends Module {
             GL11.glColor4f(1.0F, 1.0F, 1.0F, 1.0F);
             GL11.glPopMatrix();
         }
+    }
+
+    private void drawHealthBar(AxisAlignedBB bb, float health, float maxHealth) {
+        float ratio = Math.max(0.0F, Math.min(1.0F, health / maxHealth));
+        double barX = bb.maxX + 0.05D;
+        double barBottom = bb.minY;
+        double barTop = bb.maxY;
+        double barHeight = (barTop - barBottom) * ratio;
+        float r = ratio > 0.5F ? (1.0F - ratio) * 2.0F : 1.0F;
+        float g = ratio > 0.5F ? 1.0F : ratio * 2.0F;
+        // Background
+        GlStateManager.color(0.2F, 0.2F, 0.2F, 0.6F);
+        GL11.glBegin(GL11.GL_QUADS);
+        GL11.glVertex3d(barX, barBottom, bb.minZ);
+        GL11.glVertex3d(barX, barTop, bb.minZ);
+        GL11.glVertex3d(barX + 0.08D, barTop, bb.minZ);
+        GL11.glVertex3d(barX + 0.08D, barBottom, bb.minZ);
+        GL11.glEnd();
+        // Fill
+        GlStateManager.color(r, g, 0.0F, 0.85F);
+        GL11.glBegin(GL11.GL_QUADS);
+        GL11.glVertex3d(barX, barBottom, bb.minZ);
+        GL11.glVertex3d(barX, barBottom + barHeight, bb.minZ);
+        GL11.glVertex3d(barX + 0.08D, barBottom + barHeight, bb.minZ);
+        GL11.glVertex3d(barX + 0.08D, barBottom, bb.minZ);
+        GL11.glEnd();
     }
 
     private void drawOutlinedBox(AxisAlignedBB bb, float r, float g, float b, float a) {
@@ -165,10 +181,11 @@ public final class PlayerEspModule extends Module {
     }
 
     private float[] getClassicColor() {
+        int rgb = classicColor.getRgb();
         return new float[] {
-            red.getValue() / 255.0F,
-            green.getValue() / 255.0F,
-            blue.getValue() / 255.0F
+            ((rgb >> 16) & 0xFF) / 255.0F,
+            ((rgb >> 8) & 0xFF) / 255.0F,
+            (rgb & 0xFF) / 255.0F
         };
     }
 

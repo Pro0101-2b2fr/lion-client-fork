@@ -43,9 +43,11 @@ public final class BedPlatesModule extends Module {
     private static final float LABEL_DISTANCE_MULTIPLIER = 6.0F;
     private static final float LABEL_MAX_SCALE = 0.30F;
 
-    private final NumberSetting range = new NumberSetting("Range", 5, 128, 1, 128);
+    private final NumberSetting range = new NumberSetting("Range", 5, 128, 1, 64);
     private final NumberSetting layers = new NumberSetting("Layers", 1, 4, 1, 2);
+    private final NumberSetting maxBeds = new NumberSetting("Max Beds", 1, 32, 1, 10);
     private final BooleanSetting showDistance = new BooleanSetting("Show Distance", true);
+    private final BooleanSetting compactMode = new BooleanSetting("Compact", false);
 
     private final Map<String, CachedBed> bedCache = new HashMap<String, CachedBed>();
     private final Map<Long, Set<String>> chunkBeds = new HashMap<Long, Set<String>>();
@@ -62,7 +64,9 @@ public final class BedPlatesModule extends Module {
         super("BedPlates", "Shows the unique defense blocks around nearby beds.", Category.RENDER, Keyboard.KEY_NONE);
         addSetting(range);
         addSetting(layers);
+        addSetting(maxBeds);
         addSetting(showDistance);
+        addSetting(compactMode);
     }
 
     @Override
@@ -140,6 +144,11 @@ public final class BedPlatesModule extends Module {
                 return Double.compare(left.distanceSq, right.distanceSq);
             }
         });
+
+        int cap = maxBeds.getValue();
+        if (cap > 0 && beds.size() > cap) {
+            beds = beds.subList(0, cap);
+        }
 
         for (BedRenderInfo bed : beds) {
             renderLabel(mc, bed);
@@ -366,7 +375,7 @@ public final class BedPlatesModule extends Module {
         double y = Math.max(bed.first.getY(), bed.second.getY()) + 1.35D - viewerY;
         double z = (bed.first.getZ() + bed.second.getZ()) / 2.0D + 0.5D - viewerZ;
 
-        String defenseText = bed.defenses.isEmpty() ? "Uncovered" : joinNames(bed.defenses);
+        String defenseText = bed.defenses.isEmpty() ? "Uncovered" : compactMode.isEnabled() ? compactLabel(bed.defenses) : joinNames(bed.defenses);
         if (showDistance.isEnabled()) {
             defenseText = defenseText + String.format(Locale.US, " [%.1fm]", Math.sqrt(bed.distanceSq));
         }
@@ -438,6 +447,10 @@ public final class BedPlatesModule extends Module {
             }
         }
         return builder.toString();
+    }
+
+    private String compactLabel(Set<String> names) {
+        return names.size() + "L " + names.iterator().next();
     }
 
     private void resetCache() {

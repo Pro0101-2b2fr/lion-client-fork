@@ -1,66 +1,93 @@
 package com.lionclient.gui;
 
-import com.lionclient.feature.module.impl.HudModule;
+import com.lionclient.feature.module.Module;
+import com.lionclient.feature.module.ModuleManager;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.FontRenderer;
 import net.minecraft.client.gui.Gui;
 import net.minecraft.client.gui.GuiScreen;
 import net.minecraft.client.gui.ScaledResolution;
 
+/**
+ * Drag-and-drop editor for every {@link HudElement} registered in the module
+ * manager. Hover an element to highlight it, click and drag to move it. The
+ * element snaps to the screen edges when the cursor approaches them and shows
+ * its name plus position in a label above the bounding box.
+ */
 public final class HudEditorScreen extends GuiScreen {
-    private static final int PADDING = 4;
+    private static final int PADDING = 3;
+    private static final int SNAP_DISTANCE = 6;
 
-    private final HudModule hudModule;
-    private boolean dragging;
+    private final ModuleManager moduleManager;
+    private HudElement dragged;
     private int dragOffsetX;
     private int dragOffsetY;
 
-    public HudEditorScreen(HudModule hudModule) {
-        this.hudModule = hudModule;
+    public HudEditorScreen(ModuleManager moduleManager) {
+        this.moduleManager = moduleManager;
     }
 
     @Override
     public void drawScreen(int mouseX, int mouseY, float partialTicks) {
-        drawDefaultBackground();
+        drawBackgroundOverlay();
+        drawCenteredString(this.fontRendererObj, "HUD Editor", this.width / 2, 10, 0xFFFFFFFF);
+        drawCenteredString(this.fontRendererObj, "Drag any element. ESC to close.", this.width / 2, 22, 0xFFB8BECF);
 
-        if (hudModule == null) {
-            drawCenteredString(this.fontRendererObj, "HUD module missing", this.width / 2, this.height / 2, 0xFFFFFFFF);
-            super.drawScreen(mouseX, mouseY, partialTicks);
-            return;
+        ScaledResolution resolution = new ScaledResolution(this.mc);
+        if (dragged != null) {
+            int newX = mouseX - dragOffsetX;
+            int newY = mouseY - dragOffsetY;
+            int width = dragged.getHudWidth(resolution);
+            int height = dragged.getHudHeight(resolution);
+            newX = clamp(newX, 0, Math.max(0, resolution.getScaledWidth() - width));
+            newY = clamp(newY, 0, Math.max(0, resolution.getScaledHeight() - height));
+            newX = snap(newX, 0);
+            newX = snap(newX, resolution.getScaledWidth() - width);
+            newY = snap(newY, 0);
+            newY = snap(newY, resolution.getScaledHeight() - height);
+            dragged.setHudPosition(newX, newY);
         }
 
-        if (dragging) {
-            updatePosition(mouseX, mouseY);
+        List<HudElement> elements = collectElements();
+        for (HudElement element : elements) {
+            element.renderHudPreview(resolution);
         }
 
-        drawCenteredString(this.fontRendererObj, "HUD Editor", this.width / 2, 12, 0xFFFFFFFF);
-        drawCenteredString(this.fontRendererObj, "Drag the module list. ESC closes.", this.width / 2, 24, 0xFFB8BECF);
+        for (HudElement element : elements) {
+            drawElementBox(element, resolution, mouseX, mouseY);
+        }
 
-        drawPreviewBox(mouseX, mouseY);
-        hudModule.renderEditorPreview(new ScaledResolution(this.mc));
         super.drawScreen(mouseX, mouseY, partialTicks);
     }
 
     @Override
     protected void mouseClicked(int mouseX, int mouseY, int mouseButton) throws IOException {
         super.mouseClicked(mouseX, mouseY, mouseButton);
-        if (mouseButton != 0 || hudModule == null) {
+        if (mouseButton != 0) {
             return;
         }
 
-        Bounds bounds = getPreviewBounds();
-        if (bounds.contains(mouseX, mouseY)) {
-            dragging = true;
-            dragOffsetX = mouseX - hudModule.getAnchorX();
-            dragOffsetY = mouseY - hudModule.getAnchorY();
+        ScaledResolution resolution = new ScaledResolution(this.mc);
+        List<HudElement> elements = collectElements();
+        // Iterate in reverse so the topmost element wins when bounds overlap.
+        for (int i = elements.size() - 1; i >= 0; i--) {
+            HudElement element = elements.get(i);
+            Bounds bounds = getElementBounds(element, resolution);
+            if (bounds.contains(mouseX, mouseY)) {
+                dragged = element;
+                dragOffsetX = mouseX - element.getHudX();
+                dragOffsetY = mouseY - element.getHudY();
+                return;
+            }
         }
     }
 
     @Override
     protected void mouseReleased(int mouseX, int mouseY, int state) {
         super.mouseReleased(mouseX, mouseY, state);
-        dragging = false;
+        dragged = null;
     }
 
     @Override
@@ -68,49 +95,75 @@ public final class HudEditorScreen extends GuiScreen {
         return false;
     }
 
-    private void drawPreviewBox(int mouseX, int mouseY) {
-        Bounds bounds = getPreviewBounds();
-        int outline = bounds.contains(mouseX, mouseY) || dragging ? 0xFFE6EAF3 : 0xFF8A8F9E;
-        Gui.drawRect(bounds.left, bounds.top, bounds.right, bounds.bottom, 0x40262B3E);
+    private List<HudElement> collectElements() {
+        List<HudElement> result = new ArrayList<HudElement>();
+        if (moduleManager == null) {
+            return result;
+        }
+        for (Module module : moduleManager.getModules()) {
+            if (module instanceof HudElement) {
+                HudElement element = (HudElement) module;
+                if (element.isHudElementVisible()) {
+                    result.add(element);
+                }
+            }
+        }
+        return result;
+    }
+
+    private void drawBackgroundOverlay() {
+        Gui.drawRect(0, 0, this.width, this.height, 0x80101418);
+    }
+
+    private void drawElementBox(HudElement element, ScaledResolution resolution, int mouseX, int mouseY) {
+        Bounds bounds = getElementBounds(element, resolution);
+        boolean active = element == dragged;
+        boolean hovered = bounds.contains(mouseX, mouseY);
+
+        int outline;
+        if (active) {
+            outline = 0xFF4FB3FF;
+        } else if (hovered) {
+            outline = 0xFFE6EAF3;
+        } else {
+            outline = 0xFF8A8F9E;
+        }
+        int fillAlpha = active ? 0x60 : hovered ? 0x40 : 0x20;
+        int fill = (fillAlpha << 24) | 0x262B3E;
+        Gui.drawRect(bounds.left, bounds.top, bounds.right, bounds.bottom, fill);
         Gui.drawRect(bounds.left, bounds.top, bounds.right, bounds.top + 1, outline);
         Gui.drawRect(bounds.left, bounds.bottom - 1, bounds.right, bounds.bottom, outline);
         Gui.drawRect(bounds.left, bounds.top, bounds.left + 1, bounds.bottom, outline);
         Gui.drawRect(bounds.right - 1, bounds.top, bounds.right, bounds.bottom, outline);
-    }
 
-    private void updatePosition(int mouseX, int mouseY) {
-        Minecraft minecraft = Minecraft.getMinecraft();
-        ScaledResolution resolution = new ScaledResolution(minecraft);
-        FontRenderer fontRenderer = minecraft.fontRendererObj;
-        int previewWidth = hudModule.getPreviewWidth(minecraft);
-        int previewHeight = hudModule.getPreviewHeight(minecraft);
-        int anchorX = mouseX - dragOffsetX;
-        int anchorY = mouseY - dragOffsetY;
-        boolean rightAligned = anchorX >= resolution.getScaledWidth() / 2;
-
-        if (rightAligned) {
-            anchorX = Math.max(previewWidth, Math.min(anchorX, resolution.getScaledWidth()));
-        } else {
-            anchorX = Math.max(0, Math.min(anchorX, Math.max(0, resolution.getScaledWidth() - previewWidth)));
+        if (hovered || active) {
+            String label = element.getHudElementName() + " · " + element.getHudX() + "," + element.getHudY();
+            int labelY = bounds.top - this.fontRendererObj.FONT_HEIGHT - 2;
+            if (labelY < 4) {
+                labelY = bounds.bottom + 3;
+            }
+            int labelX = bounds.left;
+            this.fontRendererObj.drawStringWithShadow(label, labelX, labelY, 0xFFFFFFFF);
         }
-
-        int maxY = Math.max(0, resolution.getScaledHeight() - previewHeight - Math.max(0, fontRenderer.FONT_HEIGHT));
-        anchorY = Math.max(0, Math.min(anchorY, maxY));
-        hudModule.setPosition(anchorX, anchorY);
     }
 
-    private Bounds getPreviewBounds() {
-        Minecraft minecraft = Minecraft.getMinecraft();
-        int anchorX = hudModule.getAnchorX();
-        int anchorY = hudModule.getAnchorY();
-        int previewWidth = hudModule.getPreviewWidth(minecraft);
-        int previewHeight = hudModule.getPreviewHeight(minecraft);
-        boolean rightAligned = hudModule.isRightAligned(new ScaledResolution(minecraft));
-        int left = rightAligned ? anchorX - previewWidth - PADDING : anchorX - PADDING;
-        int right = rightAligned ? anchorX + PADDING : anchorX + previewWidth + PADDING;
-        int top = anchorY - PADDING;
-        int bottom = anchorY + previewHeight + PADDING;
+    private Bounds getElementBounds(HudElement element, ScaledResolution resolution) {
+        int left = element.getHudX() - PADDING;
+        int top = element.getHudY() - PADDING;
+        int right = element.getHudX() + element.getHudWidth(resolution) + PADDING;
+        int bottom = element.getHudY() + element.getHudHeight(resolution) + PADDING;
         return new Bounds(left, top, right, bottom);
+    }
+
+    private static int clamp(int value, int min, int max) {
+        if (max < min) {
+            return min;
+        }
+        return Math.max(min, Math.min(max, value));
+    }
+
+    private static int snap(int value, int target) {
+        return Math.abs(value - target) <= SNAP_DISTANCE ? target : value;
     }
 
     private static final class Bounds {

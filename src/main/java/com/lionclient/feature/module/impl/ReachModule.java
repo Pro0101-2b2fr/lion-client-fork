@@ -28,6 +28,16 @@ public final class ReachModule extends Module {
         addSetting(chance);
     }
 
+    public double getReachValue() {
+        return Math.max(VANILLA_REACH, reach.getValue());
+    }
+
+    @Override
+    public String getHudInfo() {
+        double extra = Math.max(0.0D, reach.getValue() - VANILLA_REACH);
+        return extra <= 0.001D ? "" : String.format("+%.1f", extra);
+    }
+
     @Override
     public void onMouseEvent(MouseEvent event) {
         Minecraft minecraft = Minecraft.getMinecraft();

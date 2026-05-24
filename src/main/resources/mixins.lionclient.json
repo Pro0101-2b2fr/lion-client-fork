@@ -12,7 +12,8 @@
     "MixinMinecraft",
     "MixinEntityRenderer",
     "MixinEntityPlayerSP",
-    "MixinMovementInputFromOptions"
+    "MixinMovementInputFromOptions",
+    "MixinGuiIngame"
   ],
   "injectors": {
     "defaultRequire": 1

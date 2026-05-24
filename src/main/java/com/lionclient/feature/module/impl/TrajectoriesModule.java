@@ -2,6 +2,7 @@ package com.lionclient.feature.module.impl;
 
 import com.lionclient.feature.module.Category;
 import com.lionclient.feature.module.Module;
+import com.lionclient.feature.setting.ColorSetting;
 import com.lionclient.feature.setting.NumberSetting;
 import java.util.ArrayList;
 import java.util.List;
@@ -33,28 +34,16 @@ import org.lwjgl.opengl.GL11;
 public final class TrajectoriesModule extends Module {
     private static final double SIMULATION_STEP = 0.1D;
 
-    private final NumberSetting aimingRed = new NumberSetting("Aiming Red", 0, 255, 5, 85);
-    private final NumberSetting aimingGreen = new NumberSetting("Aiming Green", 0, 255, 5, 255);
-    private final NumberSetting aimingBlue = new NumberSetting("Aiming Blue", 0, 255, 5, 85);
-    private final NumberSetting trajectoryRed = new NumberSetting("Trajectory Red", 0, 255, 5, 255);
-    private final NumberSetting trajectoryGreen = new NumberSetting("Trajectory Green", 0, 255, 5, 255);
-    private final NumberSetting trajectoryBlue = new NumberSetting("Trajectory Blue", 0, 255, 5, 255);
-    private final NumberSetting targetRed = new NumberSetting("Target Red", 0, 255, 5, 255);
-    private final NumberSetting targetGreen = new NumberSetting("Target Green", 0, 255, 5, 80);
-    private final NumberSetting targetBlue = new NumberSetting("Target Blue", 0, 255, 5, 80);
+    private final ColorSetting aimingColor = new ColorSetting("Aiming Color", 0xFF55FF55);
+    private final ColorSetting trajectoryColor = new ColorSetting("Trajectory Color", 0xFFFFFFFF);
+    private final ColorSetting targetColor = new ColorSetting("Target Color", 0xFFFF5050);
     private final NumberSetting thickness = new NumberSetting("Thickness", 1, 6, 1, 2);
 
     public TrajectoriesModule() {
         super("Trajectories", "Predicts projectile flight paths and highlights entity hits.", Category.RENDER, Keyboard.KEY_NONE);
-        addSetting(aimingRed);
-        addSetting(aimingGreen);
-        addSetting(aimingBlue);
-        addSetting(trajectoryRed);
-        addSetting(trajectoryGreen);
-        addSetting(trajectoryBlue);
-        addSetting(targetRed);
-        addSetting(targetGreen);
-        addSetting(targetBlue);
+        addSetting(aimingColor);
+        addSetting(trajectoryColor);
+        addSetting(targetColor);
         addSetting(thickness);
     }
 
@@ -77,23 +66,24 @@ public final class TrajectoriesModule extends Module {
         }
 
         float[] lineColor = result.entityHit == null ? getTrajectoryColor() : getAimingColor();
-        GL11.glPushMatrix();
-        try {
-            GlStateManager.disableTexture2D();
-            GlStateManager.enableBlend();
-            GlStateManager.tryBlendFuncSeparate(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA, 1, 0);
-            GlStateManager.disableDepth();
-            GlStateManager.depthMask(false);
-            GlStateManager.disableLighting();
-            GlStateManager.disableCull();
-            GL11.glEnable(GL11.GL_LINE_SMOOTH);
-            GL11.glLineWidth(thickness.getValue());
+        GlStateManager.disableTexture2D();
+        GlStateManager.enableBlend();
+        GlStateManager.tryBlendFuncSeparate(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA, 1, 0);
+        GlStateManager.disableDepth();
+        GlStateManager.depthMask(false);
+        GlStateManager.disableLighting();
+        GlStateManager.disableCull();
+        GL11.glEnable(GL11.GL_LINE_SMOOTH);
+        GL11.glLineWidth(thickness.getValue());
 
+        try {
             renderPath(minecraft, result.points, lineColor);
+            if (result.entityHit != null && result.hitVec != null) {
+                renderHitMarker(minecraft, result.hitVec);
+            }
         } finally {
-            GL11.glDisable(GL11.GL_LINE_SMOOTH);
-            GL11.glDisable(GL11.GL_LINE_SMOOTH);
             GL11.glLineWidth(1.0F);
+            GL11.glDisable(GL11.GL_LINE_SMOOTH);
             GlStateManager.enableCull();
             GlStateManager.enableLighting();
             GlStateManager.depthMask(true);
@@ -101,8 +91,6 @@ public final class TrajectoriesModule extends Module {
             GlStateManager.disableBlend();
             GlStateManager.enableTexture2D();
             GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
-            GL11.glColor4f(1.0F, 1.0F, 1.0F, 1.0F);
-            GL11.glPopMatrix();
         }
     }
 
@@ -288,24 +276,46 @@ public final class TrajectoriesModule extends Module {
         tessellator.draw();
     }
 
-    private void vertex(double x1, double y1, double z1, double x2, double y2, double z2) {
-        GL11.glVertex3d(x1, y1, z1);
-        GL11.glVertex3d(x2, y2, z2);
+    private void renderHitMarker(Minecraft minecraft, Vec3 hitVec) {
+        double viewerX = minecraft.getRenderManager().viewerPosX;
+        double viewerY = minecraft.getRenderManager().viewerPosY;
+        double viewerZ = minecraft.getRenderManager().viewerPosZ;
+        double x = hitVec.xCoord - viewerX;
+        double y = hitVec.yCoord - viewerY;
+        double z = hitVec.zCoord - viewerZ;
+        float[] tc = toFloatArray(targetColor.getRgb());
+
+        GL11.glLineWidth(3.0F);
+        Tessellator tessellator = Tessellator.getInstance();
+        WorldRenderer renderer = tessellator.getWorldRenderer();
+        double size = 0.3D;
+        // X cross
+        renderer.begin(GL11.GL_LINES, DefaultVertexFormats.POSITION_COLOR);
+        renderer.pos(x - size, y - size, z).color(tc[0], tc[1], tc[2], 1.0F).endVertex();
+        renderer.pos(x + size, y + size, z).color(tc[0], tc[1], tc[2], 1.0F).endVertex();
+        renderer.pos(x + size, y - size, z).color(tc[0], tc[1], tc[2], 1.0F).endVertex();
+        renderer.pos(x - size, y + size, z).color(tc[0], tc[1], tc[2], 1.0F).endVertex();
+        // Z cross
+        renderer.pos(x, y - size, z - size).color(tc[0], tc[1], tc[2], 1.0F).endVertex();
+        renderer.pos(x, y + size, z + size).color(tc[0], tc[1], tc[2], 1.0F).endVertex();
+        renderer.pos(x, y + size, z - size).color(tc[0], tc[1], tc[2], 1.0F).endVertex();
+        renderer.pos(x, y - size, z + size).color(tc[0], tc[1], tc[2], 1.0F).endVertex();
+        tessellator.draw();
     }
 
     private float[] getAimingColor() {
-        return new float[] {
-            aimingRed.getValue() / 255.0F,
-            aimingGreen.getValue() / 255.0F,
-            aimingBlue.getValue() / 255.0F
-        };
+        return toFloatArray(aimingColor.getRgb());
     }
 
     private float[] getTrajectoryColor() {
+        return toFloatArray(trajectoryColor.getRgb());
+    }
+
+    private static float[] toFloatArray(int rgb) {
         return new float[] {
-            trajectoryRed.getValue() / 255.0F,
-            trajectoryGreen.getValue() / 255.0F,
-            trajectoryBlue.getValue() / 255.0F
+            ((rgb >> 16) & 0xFF) / 255.0F,
+            ((rgb >> 8) & 0xFF) / 255.0F,
+            (rgb & 0xFF) / 255.0F
         };
     }
 

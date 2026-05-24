@@ -17,14 +17,16 @@ import net.minecraft.world.World;
 import org.lwjgl.input.Keyboard;
 import org.lwjgl.input.Mouse;
 
-public final class LegitScaffoldModule extends Module {
+public final class EagleModule extends Module {
+    private final BooleanSetting blockOnly = new BooleanSetting("Block Only", true);
     private final BooleanSetting pitchCheck = new BooleanSetting("Pitch Check", false);
-    private final NumberSetting sneakDelay = new NumberSetting("Sneak Delay", 0, 250, 5, 60);
+    private final NumberSetting sneakDelay = new NumberSetting("Sneak Delay", 0, 250, 5, 0);
 
     private long sneakReleaseTime;
 
-    public LegitScaffoldModule() {
-        super("LegitScaffold", "Sneaks at block edges.", Category.MOVEMENT, Keyboard.KEY_NONE);
+    public EagleModule() {
+        super("Eagle", "Auto-sneaks while bridging blocks.", Category.MOVEMENT, Keyboard.KEY_NONE);
+        addSetting(blockOnly);
         addSetting(pitchCheck);
         addSetting(sneakDelay);
     }
@@ -43,10 +45,14 @@ public final class LegitScaffoldModule extends Module {
             return;
         }
 
-        boolean shouldSneakAtEdge = shouldSneakAtEdge(player);
-        if (shouldSneakAtEdge) {
+        if (blockOnly.isEnabled() && !isHoldingBlock(player)) {
+            releaseSneak(sneakKey);
+            return;
+        }
+
+        if (shouldSneakAtEdge(player)) {
             KeyBinding.setKeyBindState(sneakKey, true);
-            if (shouldExtendSneakDelay(minecraft)) {
+            if (Mouse.isButtonDown(1)) {
                 sneakReleaseTime = System.currentTimeMillis() + sneakDelay.getValue();
             }
             return;
@@ -73,6 +79,7 @@ public final class LegitScaffoldModule extends Module {
             return false;
         }
         if (player.movementInput.jump) {
+            // Player is trying to jump, never glue them down with sneak.
             return false;
         }
 
@@ -99,11 +106,33 @@ public final class LegitScaffoldModule extends Module {
     private boolean shouldSneakSafewalk(EntityPlayerSP player) {
         double motionX = player.motionX;
         double motionZ = player.motionZ;
-        double projectedX = MathHelper.clamp_double(motionX, -0.32D, 0.32D);
-        double projectedZ = MathHelper.clamp_double(motionZ, -0.32D, 0.32D);
-        if (Math.abs(projectedX) < 1.0E-3D && Math.abs(projectedZ) < 1.0E-3D) {
-            projectedX = MathHelper.clamp_double(player.moveStrafing * 0.12D, -0.12D, 0.12D);
-            projectedZ = MathHelper.clamp_double(player.moveForward * 0.12D, -0.12D, 0.12D);
+        double speed = Math.sqrt(motionX * motionX + motionZ * motionZ);
+
+        // Use actual velocity direction if moving, otherwise use input direction.
+        double projectedX;
+        double projectedZ;
+        if (speed > 0.01D) {
+            // Shorter projection to avoid triggering too early.
+            double projection = Math.max(0.20D, Math.min(0.30D, speed + 0.06D));
+            projectedX = (motionX / speed) * projection;
+            projectedZ = (motionZ / speed) * projection;
+        } else {
+            float forward = player.movementInput != null ? player.movementInput.moveForward : 0.0F;
+            float strafe = player.movementInput != null ? player.movementInput.moveStrafe : 0.0F;
+            if (Math.abs(forward) < 0.001F && Math.abs(strafe) < 0.001F) {
+                return isStandingOnEdge(player);
+            }
+            double yawRadians = Math.toRadians(player.rotationYaw);
+            double sin = Math.sin(yawRadians);
+            double cos = Math.cos(yawRadians);
+            double dirX = strafe * cos - forward * sin;
+            double dirZ = forward * cos + strafe * sin;
+            double len = Math.sqrt(dirX * dirX + dirZ * dirZ);
+            if (len < 0.001D) {
+                return isStandingOnEdge(player);
+            }
+            projectedX = (dirX / len) * 0.28D;
+            projectedZ = (dirZ / len) * 0.28D;
         }
 
         if (Math.abs(projectedX) < 1.0E-3D && Math.abs(projectedZ) < 1.0E-3D) {
@@ -129,22 +158,33 @@ public final class LegitScaffoldModule extends Module {
 
     private boolean isEdgeUnsafe(EntityPlayerSP player, double offsetX, double offsetZ) {
         World world = Minecraft.getMinecraft().theWorld;
-        double[] movement = new double[] {offsetX, offsetZ};
         AxisAlignedBB box = player.getEntityBoundingBox();
-        AxisAlignedBB projectedBox = box.offset(movement[0], 0.0D, movement[1]);
+        AxisAlignedBB projectedBox = box.offset(offsetX, 0.0D, offsetZ);
         double sampleY = projectedBox.minY - 0.08D;
-        double[] lateral = getLateralOffset(movement);
-        double leadX = (projectedBox.minX + projectedBox.maxX) * 0.5D;
-        double leadZ = (projectedBox.minZ + projectedBox.maxZ) * 0.5D;
-        double sideReach = Math.max(0.20D, (projectedBox.maxX - projectedBox.minX) * 0.48D);
-        double sideX = lateral[0] * sideReach;
-        double sideZ = lateral[1] * sideReach;
 
-        boolean centerSupported = hasSupport(world, leadX, sampleY, leadZ);
-        boolean leftSupported = hasSupport(world, leadX + sideX, sampleY, leadZ + sideZ);
-        boolean rightSupported = hasSupport(world, leadX - sideX, sampleY, leadZ - sideZ);
+        double insetX = Math.min(0.28D, (projectedBox.maxX - projectedBox.minX) * 0.5D - 0.02D);
+        double insetZ = Math.min(0.28D, (projectedBox.maxZ - projectedBox.minZ) * 0.5D - 0.02D);
+        double centerX = (projectedBox.minX + projectedBox.maxX) * 0.5D;
+        double centerZ = (projectedBox.minZ + projectedBox.maxZ) * 0.5D;
 
-        return !centerSupported || (!leftSupported && !rightSupported);
+        boolean center = hasSupport(world, centerX, sampleY, centerZ);
+        // If center still has support, only sneak if ALL corners are gone
+        // (about to fall off completely). This prevents premature sneak in
+        // diagonal where 1-2 corners overshoot but the player is still safe.
+        if (center) {
+            boolean corner1 = hasSupport(world, centerX + insetX, sampleY, centerZ + insetZ);
+            boolean corner2 = hasSupport(world, centerX + insetX, sampleY, centerZ - insetZ);
+            boolean corner3 = hasSupport(world, centerX - insetX, sampleY, centerZ + insetZ);
+            boolean corner4 = hasSupport(world, centerX - insetX, sampleY, centerZ - insetZ);
+            int unsupported = 0;
+            if (!corner1) unsupported++;
+            if (!corner2) unsupported++;
+            if (!corner3) unsupported++;
+            if (!corner4) unsupported++;
+            // Only trigger when 3+ corners are unsupported (truly at the edge).
+            return unsupported >= 3;
+        }
+        return true;
     }
 
     private double[] getMovementOffset(EntityPlayerSP player) {
@@ -152,7 +192,7 @@ public final class LegitScaffoldModule extends Module {
         float strafe = player.movementInput.moveStrafe;
         float magnitude = MathHelper.sqrt_float(forward * forward + strafe * strafe);
         if (magnitude < 0.001F) {
-            return new double[] {0.0D, 0.0D};
+            return new double[]{0.0D, 0.0D};
         }
 
         forward /= magnitude;
@@ -165,15 +205,7 @@ public final class LegitScaffoldModule extends Module {
         double motionZ = forward * cos + strafe * sin;
         double horizontalMotion = Math.sqrt(player.motionX * player.motionX + player.motionZ * player.motionZ);
         double projection = Math.max(0.24D, Math.min(0.34D, horizontalMotion + 0.08D));
-        return new double[] {motionX * projection, motionZ * projection};
-    }
-
-    private double[] getLateralOffset(double[] movement) {
-        double length = Math.sqrt(movement[0] * movement[0] + movement[1] * movement[1]);
-        if (length < 1.0E-4D) {
-            return new double[] {1.0D, 0.0D};
-        }
-        return new double[] {-movement[1] / length, movement[0] / length};
+        return new double[]{motionX * projection, motionZ * projection};
     }
 
     private boolean hasSupport(World world, double x, double y, double z) {
@@ -185,13 +217,9 @@ public final class LegitScaffoldModule extends Module {
         return world.getBlockState(samplePos).getBlock().getMaterial() != Material.air;
     }
 
-    private boolean shouldExtendSneakDelay(Minecraft minecraft) {
-        if (!Mouse.isButtonDown(1) || minecraft.objectMouseOver == null) {
-            return false;
-        }
-
-        ItemStack heldItem = minecraft.thePlayer.getHeldItem();
-        return heldItem != null && heldItem.getItem() instanceof ItemBlock;
+    private boolean isHoldingBlock(EntityPlayerSP player) {
+        ItemStack held = player.getHeldItem();
+        return held != null && held.getItem() instanceof ItemBlock;
     }
 
     private void releaseSneak(int sneakKey) {

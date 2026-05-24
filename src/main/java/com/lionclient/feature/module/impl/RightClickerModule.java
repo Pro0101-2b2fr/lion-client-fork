@@ -5,6 +5,8 @@ import com.lionclient.feature.module.Module;
 import com.lionclient.feature.setting.BooleanSetting;
 import com.lionclient.feature.setting.EnumSetting;
 import com.lionclient.feature.setting.NumberSetting;
+import com.lionclient.util.HumanClickTimer;
+import com.lionclient.util.MouseGcdHelper;
 import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.Random;
@@ -21,6 +23,7 @@ import org.lwjgl.input.Mouse;
 
 public final class RightClickerModule extends Module {
     private final Random random = new Random();
+    private final HumanClickTimer clickTimer = new HumanClickTimer();
 
     private final EnumSetting<Mode> mode = new EnumSetting<Mode>("Mode", Mode.values(), Mode.NORMAL);
     private final BooleanSetting onlyBlocks = new BooleanSetting("Only Blocks", true);
@@ -31,7 +34,6 @@ public final class RightClickerModule extends Module {
     private long lastClick;
     private long holdUntil;
     private long recordNextClickTime;
-    private int burstTicks;
     private int recordIndex;
     private boolean rightDown;
     private boolean recordNoticeShown;
@@ -105,13 +107,12 @@ public final class RightClickerModule extends Module {
     }
 
     private void normalClick() {
-        long delay = computeDelayMillis();
-        long holdLength = Math.max(1L, delay / 2L);
+        long delay = clickTimer.nextDelayMs(minCps.getValue(), maxCps.getValue());
         long now = System.currentTimeMillis();
 
         if (now - lastClick >= delay) {
             lastClick = now;
-            holdUntil = now + holdLength;
+            holdUntil = now + clickTimer.nextHoldLengthMs(delay);
             sendClick(true);
             rightDown = true;
         } else if (rightDown && now >= holdUntil) {
@@ -166,32 +167,9 @@ public final class RightClickerModule extends Module {
         if (strength <= 0) {
             return;
         }
-
         float yawDelta = (random.nextBoolean() ? 1 : -1) * random.nextFloat() * (strength * 0.45F);
         float pitchDelta = (random.nextBoolean() ? 1 : -1) * random.nextFloat() * (strength * 0.2F);
-        minecraft.thePlayer.rotationYaw += yawDelta;
-        minecraft.thePlayer.rotationPitch = clampPitch(minecraft.thePlayer.rotationPitch + pitchDelta);
-    }
-
-    private long computeDelayMillis() {
-        int min = minCps.getValue();
-        int max = Math.max(min, maxCps.getValue());
-        double cps = min + (random.nextDouble() * (max - min + 1));
-        if (burstTicks <= 0) {
-            burstTicks = 3 + random.nextInt(9);
-        }
-        burstTicks--;
-        cps += Math.sin(System.nanoTime() / 65000000.0D) * 0.95D;
-        cps += random.nextGaussian() * 0.55D;
-        cps += burstTicks % 4 == 0 ? -0.85D : 0.35D;
-        if (random.nextDouble() < 0.08D) {
-            cps -= 0.6D + (random.nextDouble() * 0.9D);
-        }
-        if (random.nextDouble() < 0.05D) {
-            cps += 0.4D + (random.nextDouble() * 0.8D);
-        }
-        cps = Math.max(1.0D, cps);
-        return Math.max(1L, Math.round(1000.0D / cps));
+        MouseGcdHelper.rotateBy(minecraft, yawDelta, pitchDelta);
     }
 
     private void resetClickState() {
@@ -200,6 +178,7 @@ public final class RightClickerModule extends Module {
         recordNextClickTime = -1L;
         recordIndex = 0;
         recordNoticeShown = false;
+        clickTimer.reset();
         resetPhysicalState();
     }
 
