@@ -7,6 +7,7 @@ import com.lionclient.feature.setting.ActionSetting;
 import com.lionclient.feature.setting.BooleanSetting;
 import com.lionclient.feature.setting.ColorSetting;
 import com.lionclient.feature.setting.EnumSetting;
+import com.lionclient.feature.setting.FloatSetting;
 import com.lionclient.feature.setting.NumberSetting;
 import com.lionclient.gui.HudElement;
 import java.util.ArrayList;
@@ -29,6 +30,7 @@ public final class HudModule extends Module implements HudElement {
     private final BooleanSetting showCoords = new BooleanSetting("Coordinates", false);
     private final BooleanSetting showDirection = new BooleanSetting("Direction", false);
     private final BooleanSetting showBps = new BooleanSetting("BPS", false);
+    private final FloatSetting scale = new FloatSetting("Scale", 0.5F, 2.0F, 0.1F, 1.0F);
     private final NumberSetting hudX = new NumberSetting("X", 0, 4000, 1, DEFAULT_X);
     private final NumberSetting hudY = new NumberSetting("Y", 0, 4000, 1, DEFAULT_Y);
 
@@ -38,6 +40,7 @@ public final class HudModule extends Module implements HudElement {
     private double smoothedBps;
     private long lastBpsDisplayUpdate;
     private String cachedBpsText = "0.00 BPS";
+    private final List<String> infoLines = new ArrayList<String>();
     private final ActionSetting editor = new ActionSetting("Move HUD", new Runnable() {
         @Override
         public void run() {
@@ -54,7 +57,7 @@ public final class HudModule extends Module implements HudElement {
     });
 
     public HudModule() {
-        super("HUD", "Displays enabled modules on screen.", Category.RENDER, Keyboard.KEY_NONE);
+        super("HUD", "Displays enabled modules on screen.", Category.HUD, Keyboard.KEY_NONE);
         instance = this;
         color.setVisibility(new java.util.function.BooleanSupplier() {
             @Override
@@ -138,6 +141,16 @@ public final class HudModule extends Module implements HudElement {
     }
 
     @Override
+    public float getHudScale() {
+        return scale.getValue();
+    }
+
+    @Override
+    public void setHudScale(float s) {
+        scale.setManualValue(s);
+    }
+
+    @Override
     public void renderHudPreview(ScaledResolution resolution) {
         List<String> previewLines = getEnabledModuleNames();
         if (previewLines.isEmpty()) {
@@ -169,28 +182,28 @@ public final class HudModule extends Module implements HudElement {
             return;
         }
 
-        List<String> info = new ArrayList<String>();
+        infoLines.clear();
         if (showFps.isEnabled()) {
-            info.add(Minecraft.getDebugFPS() + " FPS");
+            infoLines.add(Minecraft.getDebugFPS() + " FPS");
         }
         if (showCoords.isEnabled()) {
-            info.add(String.format("XYZ: %.1f / %.1f / %.1f", minecraft.thePlayer.posX, minecraft.thePlayer.posY, minecraft.thePlayer.posZ));
+            infoLines.add(String.format("XYZ: %.1f / %.1f / %.1f", minecraft.thePlayer.posX, minecraft.thePlayer.posY, minecraft.thePlayer.posZ));
         }
         if (showDirection.isEnabled()) {
-            info.add("Facing: " + getFacing(minecraft.thePlayer.rotationYaw));
+            infoLines.add("Facing: " + getFacing(minecraft.thePlayer.rotationYaw));
         }
         if (showBps.isEnabled()) {
-            info.add(getBpsText(minecraft));
+            infoLines.add(getBpsText(minecraft));
         }
-        if (info.isEmpty()) {
+        if (infoLines.isEmpty()) {
             return;
         }
 
         int color = getColor();
         boolean rightAligned = isHudRightAligned(resolution);
         int anchorX = Math.max(0, Math.min(hudX.getValue(), resolution.getScaledWidth()));
-        int infoY = resolution.getScaledHeight() - 4 - info.size() * (minecraft.fontRendererObj.FONT_HEIGHT + 2);
-        for (String line : info) {
+        int infoY = resolution.getScaledHeight() - 4 - infoLines.size() * (minecraft.fontRendererObj.FONT_HEIGHT + 2);
+        for (String line : infoLines) {
             int drawX = rightAligned ? anchorX - minecraft.fontRendererObj.getStringWidth(line) : anchorX;
             minecraft.fontRendererObj.drawStringWithShadow(line, drawX, infoY, color);
             infoY += minecraft.fontRendererObj.FONT_HEIGHT + 2;

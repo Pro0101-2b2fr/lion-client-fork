@@ -6,6 +6,7 @@ import com.lionclient.feature.setting.NumberSetting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.client.settings.KeyBinding;
+import net.minecraft.util.MovingObjectPosition;
 import net.minecraftforge.fml.common.gameevent.TickEvent;
 import org.lwjgl.input.Keyboard;
 
@@ -71,12 +72,15 @@ public final class WTapModule extends Module {
 
         // Detect a new swing (attack animation started this tick).
         if (player.isSwingInProgress && player.swingProgressInt == 0 && player.ticksExisted != lastSwingTick) {
-            lastSwingTick = player.ticksExisted;
-            // Only trigger if sprinting and moving forward.
-            if (player.isSprinting() && player.movementInput != null && player.movementInput.moveForward > 0.0F) {
-                if (chance.getValue() >= 100 || Math.random() * 100.0D < chance.getValue()) {
-                    releasing = true;
-                    releaseCounter = releaseTicks.getValue();
+            // Check if we are actually targeting an entity.
+            if (minecraft.objectMouseOver != null && minecraft.objectMouseOver.typeOfHit == MovingObjectPosition.MovingObjectType.ENTITY) {
+                lastSwingTick = player.ticksExisted;
+                // Only trigger if sprinting and moving forward.
+                if (player.isSprinting() && player.movementInput != null && player.movementInput.moveForward > 0.0F) {
+                    if (chance.getValue() >= 100 || Math.random() * 100.0D < chance.getValue()) {
+                        releasing = true;
+                        releaseCounter = releaseTicks.getValue();
+                    }
                 }
             }
         }

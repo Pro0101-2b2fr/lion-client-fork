@@ -33,6 +33,12 @@ public interface HudElement {
     /** Sets the new position. The implementation is responsible for clamping. */
     void setHudPosition(int x, int y);
 
+    /** Scale factor (1.0 = normal size). */
+    float getHudScale();
+
+    /** Sets the new scale. */
+    void setHudScale(float scale);
+
     /**
      * Renders a preview inside the editor. Defaults to nothing, modules with
      * dynamic content (HudModule with module list) override this so an empty

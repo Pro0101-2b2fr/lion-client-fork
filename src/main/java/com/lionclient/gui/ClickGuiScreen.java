@@ -128,6 +128,8 @@ public final class ClickGuiScreen extends GuiScreen {
         private Module expandedModule;
         private Module bindingModule;
         private Module hoveredModule;
+        private Setting draggingSetting;
+        private boolean draggingRangeHigh;
         private long hoveredSince;
         private int hoveredRowY;
         private int x;
@@ -145,6 +147,12 @@ public final class ClickGuiScreen extends GuiScreen {
 
         private void draw(int mouseX, int mouseY, net.minecraft.client.gui.FontRenderer fontRenderer, int screenWidth) {
             int accent = ClickGuiModule.getAccentColor();
+            if (draggingSetting != null && !org.lwjgl.input.Mouse.isButtonDown(0)) {
+                draggingSetting = null;
+            }
+            if (draggingSetting != null) {
+                updateDragValue(mouseX);
+            }
             if (dragging) {
                 x = mouseX - dragOffsetX;
                 y = mouseY - dragOffsetY;
@@ -174,7 +182,41 @@ public final class ClickGuiScreen extends GuiScreen {
                         if (!setting.isVisible()) {
                             continue;
                         }
+                        
                         Gui.drawRect(x + 4, rowY, x + WIDTH - 4, rowY + ROW_HEIGHT, 0x9040485C);
+                        
+                        if (setting instanceof NumberSetting || setting instanceof DecimalSetting) {
+                            double val = 0;
+                            double min = 0;
+                            double max = 1;
+                            if (setting instanceof NumberSetting) {
+                                NumberSetting number = (NumberSetting) setting;
+                                val = number.getValue();
+                                min = number.getMin();
+                                max = number.getMax();
+                            } else {
+                                DecimalSetting decimal = (DecimalSetting) setting;
+                                val = decimal.getValue();
+                                min = decimal.getMin();
+                                max = decimal.getMax();
+                            }
+                            float percent = (float) ((val - min) / (max - min));
+                            percent = Math.max(0.0F, Math.min(1.0F, percent));
+                            int filledWidth = (int) ((WIDTH - 8) * percent);
+                            Gui.drawRect(x + 4, rowY, x + 4 + filledWidth, rowY + ROW_HEIGHT, 0x70000000 | accent);
+                        } else if (setting instanceof IntRangeSetting) {
+                            IntRangeSetting range = (IntRangeSetting) setting;
+                            double min = range.getMin();
+                            double max = range.getMax();
+                            double low = range.getLow();
+                            double high = range.getHigh();
+                            float lowPercent = (float) ((low - min) / (max - min));
+                            float highPercent = (float) ((high - min) / (max - min));
+                            int startX = x + 4 + (int) ((WIDTH - 8) * lowPercent);
+                            int endX = x + 4 + (int) ((WIDTH - 8) * highPercent);
+                            Gui.drawRect(startX, rowY, endX, rowY + ROW_HEIGHT, 0x70000000 | accent);
+                        }
+                        
                         fontRenderer.drawString(setting.getName(), x + 6, rowY + 3, 0xFFE8EAF1);
                         fontRenderer.drawString(setting.getValueText(), x + WIDTH - 6 - fontRenderer.getStringWidth(setting.getValueText()), rowY + 3, 0xFF000000 | accent);
                         rowY += ROW_HEIGHT;
@@ -231,7 +273,20 @@ public final class ClickGuiScreen extends GuiScreen {
                             continue;
                         }
                         if (isHovered(mouseX, mouseY, x + 4, rowY, WIDTH - 8, ROW_HEIGHT)) {
-                            handleSettingClick(setting, mouseButton, module);
+                            if (mouseButton == 0 && (setting instanceof NumberSetting || setting instanceof DecimalSetting || setting instanceof IntRangeSetting)) {
+                                draggingSetting = setting;
+                                if (setting instanceof IntRangeSetting) {
+                                    IntRangeSetting range = (IntRangeSetting) setting;
+                                    float pct = (float)(mouseX - (x + 4)) / (WIDTH - 8);
+                                    double clickedVal = range.getMin() + pct * (range.getMax() - range.getMin());
+                                    double distLow = Math.abs(clickedVal - range.getLow());
+                                    double distHigh = Math.abs(clickedVal - range.getHigh());
+                                    draggingRangeHigh = distHigh < distLow;
+                                }
+                                updateDragValue(mouseX);
+                            } else {
+                                handleSettingClick(setting, mouseButton, module);
+                            }
                             return;
                         }
                         rowY += ROW_HEIGHT;
@@ -250,6 +305,7 @@ public final class ClickGuiScreen extends GuiScreen {
 
         private void mouseReleased() {
             dragging = false;
+            draggingSetting = null;
         }
 
         private void offset(int amount) {
@@ -441,6 +497,35 @@ public final class ClickGuiScreen extends GuiScreen {
             Gui.drawRect(tooltipX, tooltipY, tooltipX + tooltipWidth, tooltipY + ROW_HEIGHT, 0xE0101018);
             Gui.drawRect(tooltipX, tooltipY, tooltipX + tooltipWidth, tooltipY + 1, 0xFF000000 | ClickGuiModule.getAccentColor());
             fontRenderer.drawStringWithShadow(description, tooltipX + padding, tooltipY + 3, 0xFFFFFFFF);
+        }
+
+        private void updateDragValue(int mouseX) {
+            if (draggingSetting == null) {
+                return;
+            }
+            float pct = (float) (mouseX - (x + 4)) / (WIDTH - 8);
+            pct = Math.max(0.0F, Math.min(1.0F, pct));
+            if (draggingSetting instanceof NumberSetting) {
+                NumberSetting number = (NumberSetting) draggingSetting;
+                int val = Math.round((float) (number.getMin() + pct * (number.getMax() - number.getMin())));
+                number.setManualValue(val);
+                enforceNumberBounds(expandedModule);
+            } else if (draggingSetting instanceof DecimalSetting) {
+                DecimalSetting decimal = (DecimalSetting) draggingSetting;
+                double val = decimal.getMin() + pct * (decimal.getMax() - decimal.getMin());
+                double step = decimal.getStep();
+                val = Math.round(val / step) * step;
+                val = Math.max(decimal.getMin(), Math.min(decimal.getMax(), val));
+                decimal.setManualValue(val);
+            } else if (draggingSetting instanceof IntRangeSetting) {
+                IntRangeSetting range = (IntRangeSetting) draggingSetting;
+                int val = Math.round((float) (range.getMin() + pct * (range.getMax() - range.getMin())));
+                if (draggingRangeHigh) {
+                    range.setHigh(Math.max(range.getLow(), val), false);
+                } else {
+                    range.setLow(Math.min(range.getHigh(), val), false);
+                }
+            }
         }
 
         private boolean isHovered(int mouseX, int mouseY, int rectX, int rectY, int width, int height) {

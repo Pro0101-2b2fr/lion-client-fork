@@ -2,6 +2,8 @@ package com.lionclient.feature.module.impl;
 
 import com.lionclient.combat.ClientRotationHelper;
 import com.lionclient.event.ClientRotationEvent;
+import com.lionclient.event.EventBus;
+import com.lionclient.event.IEventListener;
 import com.lionclient.event.PrePlayerInputEvent;
 import com.lionclient.feature.module.Category;
 import com.lionclient.feature.module.Module;
@@ -25,9 +27,6 @@ import net.minecraft.util.EnumFacing;
 import net.minecraft.util.MathHelper;
 import net.minecraft.util.MovingObjectPosition;
 import org.lwjgl.input.Keyboard;
-import net.minecraftforge.common.MinecraftForge;
-import net.minecraftforge.fml.common.eventhandler.EventPriority;
-import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 import net.minecraftforge.fml.common.gameevent.TickEvent;
 
 public final class ClutchModule extends Module {
@@ -69,7 +68,8 @@ public final class ClutchModule extends Module {
     private int bridgeIndex;
     private PlacementCandidate bridgeStartPlacement;
     private boolean slotSwitchPending;
-    private boolean forgeRegistered;
+    private final IEventListener<ClientRotationEvent> rotationListener = this::onClientRotation;
+    private final IEventListener<PrePlayerInputEvent> inputListener = this::onPrePlayerInput;
 
     private ClutchModule() {
         super("Clutch", "Bridges blocks back to safety when knocked off an edge", Category.PLAYER, Keyboard.KEY_NONE);
@@ -105,12 +105,14 @@ public final class ClutchModule extends Module {
     @Override
     protected void onEnable() {
         resetState();
-        registerForge();
+        EventBus.getInstance().register(ClientRotationEvent.class, rotationListener);
+        EventBus.getInstance().register(PrePlayerInputEvent.class, inputListener);
     }
 
     @Override
     protected void onDisable() {
-        unregisterForge();
+        EventBus.getInstance().unregister(ClientRotationEvent.class, rotationListener);
+        EventBus.getInstance().unregister(PrePlayerInputEvent.class, inputListener);
 
         EntityPlayerSP player = mc.thePlayer;
         if (savedSlot != -1 && player != null && returnToSlot.isEnabled()) {
@@ -218,8 +220,7 @@ public final class ClutchModule extends Module {
         }
     }
 
-    @SubscribeEvent(priority = EventPriority.LOWEST)
-    public void onClientRotation(ClientRotationEvent event) {
+    private void onClientRotation(ClientRotationEvent event) {
         if (!isEnabled() || !silentAim.isEnabled() || !rotationActive || !isPlayerReady()) {
             return;
         }
@@ -228,8 +229,7 @@ public final class ClutchModule extends Module {
         event.pitch = Float.valueOf(currentPitch);
     }
 
-    @SubscribeEvent
-    public void onPrePlayerInput(PrePlayerInputEvent event) {
+    private void onPrePlayerInput(PrePlayerInputEvent event) {
         if (!shouldLockMovement()) {
             return;
         }
@@ -916,24 +916,6 @@ public final class ClutchModule extends Module {
 
     private boolean isPlayerReady() {
         return mc.thePlayer != null && mc.theWorld != null && !mc.thePlayer.isDead;
-    }
-
-    private void registerForge() {
-        if (forgeRegistered) {
-            return;
-        }
-
-        MinecraftForge.EVENT_BUS.register(this);
-        forgeRegistered = true;
-    }
-
-    private void unregisterForge() {
-        if (!forgeRegistered) {
-            return;
-        }
-
-        MinecraftForge.EVENT_BUS.unregister(this);
-        forgeRegistered = false;
     }
 
     public enum Trigger {

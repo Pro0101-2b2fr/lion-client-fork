@@ -11,6 +11,7 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Queue;
 import java.util.Set;
+import java.util.concurrent.ThreadLocalRandom;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.network.NetHandlerPlayClient;
 import net.minecraft.network.INetHandler;
@@ -78,7 +79,8 @@ public final class PacketDelayManager {
 
         synchronized (outboundQueue) {
             long now = System.currentTimeMillis();
-            long releaseAt = Math.max(now + delay, lastOutboundReleaseAt);
+            int jitter = ThreadLocalRandom.current().nextInt(0, 15);
+            long releaseAt = Math.max(now + delay + jitter, lastOutboundReleaseAt);
             lastOutboundReleaseAt = releaseAt;
             outboundQueue.add(new QueuedOutboundPacket(packet, listeners, releaseAt));
         }
@@ -246,9 +248,11 @@ public final class PacketDelayManager {
         Runnable action = createInboundAction(packet, listener);
         synchronized (inboundQueue) {
             long now = System.currentTimeMillis();
-            long releaseAt = Math.max(now + delay, lastInboundReleaseAt);
+            int jitter = ThreadLocalRandom.current().nextInt(0, 15);
+            long releaseAt = Math.max(now + delay + jitter, lastInboundReleaseAt);
             lastInboundReleaseAt = releaseAt;
             inboundQueue.add(new QueuedInboundPacket(packet, action, releaseAt));
+
         }
         moduleManager.onInboundPacketQueued(packet);
     }

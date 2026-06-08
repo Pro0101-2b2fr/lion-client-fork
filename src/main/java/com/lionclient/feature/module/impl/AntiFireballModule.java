@@ -3,6 +3,8 @@ package com.lionclient.feature.module.impl;
 import com.lionclient.combat.ClientRotationHelper;
 import com.lionclient.combat.KillAuraRotationUtils;
 import com.lionclient.event.ClientRotationEvent;
+import com.lionclient.event.EventBus;
+import com.lionclient.event.IEventListener;
 import com.lionclient.event.PrePlayerInputEvent;
 import com.lionclient.event.PrePlayerInteractEvent;
 import com.lionclient.feature.module.Category;
@@ -47,10 +49,12 @@ public final class AntiFireballModule extends Module {
     private final Set<Entity> trackedFireballs = new HashSet<Entity>();
     private final Random random = new Random();
     private final java.lang.reflect.Field pointedEntityField;
+    private final IEventListener<ClientRotationEvent> rotationListener = this::onClientRotation;
+    private final IEventListener<PrePlayerInputEvent> inputListener = this::onPrePlayerInput;
+    private final IEventListener<PrePlayerInteractEvent> interactListener = this::onPrePlayerInteract;
 
     private EntityFireball fireball;
     private long nextClickTime;
-    private boolean forgeRegistered;
 
     public AntiFireballModule() {
         super("AntiFireball", "Automatically aims at and hits nearby fireballs.", Category.PLAYER, Keyboard.KEY_NONE);
@@ -68,13 +72,17 @@ public final class AntiFireballModule extends Module {
         nextClickTime = 0L;
         fireball = null;
         trackedFireballs.clear();
-        registerForge();
+        EventBus.getInstance().register(ClientRotationEvent.class, rotationListener);
+        EventBus.getInstance().register(PrePlayerInputEvent.class, inputListener);
+        EventBus.getInstance().register(PrePlayerInteractEvent.class, interactListener);
         seedTrackedFireballs();
     }
 
     @Override
     protected void onDisable() {
-        unregisterForge();
+        EventBus.getInstance().unregister(ClientRotationEvent.class, rotationListener);
+        EventBus.getInstance().unregister(PrePlayerInputEvent.class, inputListener);
+        EventBus.getInstance().unregister(PrePlayerInteractEvent.class, interactListener);
         nextClickTime = 0L;
         fireball = null;
         trackedFireballs.clear();
@@ -100,8 +108,7 @@ public final class AntiFireballModule extends Module {
         }
     }
 
-    @SubscribeEvent(priority = EventPriority.LOWEST)
-    public void onClientRotation(ClientRotationEvent event) {
+    private void onClientRotation(ClientRotationEvent event) {
         Minecraft minecraft = Minecraft.getMinecraft();
         if (!shouldAim(minecraft)) {
             return;
@@ -126,8 +133,7 @@ public final class AntiFireballModule extends Module {
         event.pitch = Float.valueOf(smooth[1]);
     }
 
-    @SubscribeEvent
-    public void onPrePlayerInput(PrePlayerInputEvent event) {
+    private void onPrePlayerInput(PrePlayerInputEvent event) {
         Minecraft minecraft = Minecraft.getMinecraft();
         if (!shouldCancelMovement(minecraft)) {
             return;
@@ -141,8 +147,7 @@ public final class AntiFireballModule extends Module {
         }
     }
 
-    @SubscribeEvent
-    public void onPrePlayerInteract(PrePlayerInteractEvent event) {
+    private void onPrePlayerInteract(PrePlayerInteractEvent event) {
         Minecraft minecraft = Minecraft.getMinecraft();
         if (!shouldAim(minecraft)) {
             nextClickTime = 0L;
@@ -385,22 +390,6 @@ public final class AntiFireballModule extends Module {
 
     private float resolveBasePitch(Minecraft minecraft) {
         return Float.isNaN(KillAuraRotationUtils.serverRotations[1]) ? minecraft.thePlayer.rotationPitch : KillAuraRotationUtils.serverRotations[1];
-    }
-
-    private void registerForge() {
-        if (forgeRegistered) {
-            return;
-        }
-        MinecraftForge.EVENT_BUS.register(this);
-        forgeRegistered = true;
-    }
-
-    private void unregisterForge() {
-        if (!forgeRegistered) {
-            return;
-        }
-        MinecraftForge.EVENT_BUS.unregister(this);
-        forgeRegistered = false;
     }
 
     private static java.lang.reflect.Field findRendererField(String... names) {

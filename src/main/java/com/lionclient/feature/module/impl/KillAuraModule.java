@@ -3,6 +3,8 @@ package com.lionclient.feature.module.impl;
 import com.lionclient.combat.ClientRotationHelper;
 import com.lionclient.combat.KillAuraRotationUtils;
 import com.lionclient.event.ClientRotationEvent;
+import com.lionclient.event.EventBus;
+import com.lionclient.event.IEventListener;
 import com.lionclient.event.PrePlayerInteractEvent;
 import com.lionclient.feature.module.Category;
 import com.lionclient.feature.module.Module;
@@ -30,8 +32,6 @@ import net.minecraft.util.AxisAlignedBB;
 import net.minecraft.util.MathHelper;
 import net.minecraft.util.MovingObjectPosition;
 import net.minecraft.util.Vec3;
-import net.minecraftforge.common.MinecraftForge;
-import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 import net.minecraftforge.fml.relauncher.ReflectionHelper;
 import org.lwjgl.input.Keyboard;
 import org.lwjgl.input.Mouse;
@@ -55,12 +55,13 @@ public final class KillAuraModule extends Module {
     private final Map<Integer, Integer> hitMap = new HashMap<Integer, Integer>();
     private final Random random = new Random();
     private final java.lang.reflect.Field pointedEntityField;
+    private final IEventListener<ClientRotationEvent> rotationListener = this::onClientRotation;
+    private final IEventListener<PrePlayerInteractEvent> interactListener = this::onPrePlayerInteract;
 
     private EntityLivingBase target;
     private EntityLivingBase attackingEntity;
     private double targetDistance = Double.MAX_VALUE;
     private long nextClickTime;
-    private boolean forgeRegistered;
 
     public KillAuraModule() {
         super("KillAura", "Automatically attacks enemies.", Category.COMBAT, Keyboard.KEY_NONE);
@@ -83,19 +84,20 @@ public final class KillAuraModule extends Module {
     protected void onEnable() {
         hitMap.clear();
         clearTargetState();
-        registerForge();
+        EventBus.getInstance().register(ClientRotationEvent.class, rotationListener);
+        EventBus.getInstance().register(PrePlayerInteractEvent.class, interactListener);
     }
 
     @Override
     protected void onDisable() {
-        unregisterForge();
+        EventBus.getInstance().unregister(ClientRotationEvent.class, rotationListener);
+        EventBus.getInstance().unregister(PrePlayerInteractEvent.class, interactListener);
         hitMap.clear();
         clearTargetState();
         ClientRotationHelper.get().clearRequestedRotations();
     }
 
-    @SubscribeEvent
-    public void onClientRotation(ClientRotationEvent event) {
+    private void onClientRotation(ClientRotationEvent event) {
         Minecraft minecraft = Minecraft.getMinecraft();
         if (!basicCondition(minecraft) || !settingCondition(minecraft)) {
             clearTargetState();
@@ -137,8 +139,7 @@ public final class KillAuraModule extends Module {
         event.pitch = Float.valueOf(smooth[1]);
     }
 
-    @SubscribeEvent
-    public void onPrePlayerInteract(PrePlayerInteractEvent event) {
+    private void onPrePlayerInteract(PrePlayerInteractEvent event) {
         Minecraft minecraft = Minecraft.getMinecraft();
         if (minecraft.thePlayer == null || minecraft.theWorld == null) {
             return;
@@ -440,6 +441,10 @@ public final class KillAuraModule extends Module {
         return Math.max(33L, Math.min(180L, Math.round(baseDelay + variation)));
     }
 
+    public EntityLivingBase getTarget() {
+        return target;
+    }
+
     private void setTarget(Entity entity) {
         if (!(entity instanceof EntityLivingBase)) {
             clearTargetState();
@@ -462,22 +467,6 @@ public final class KillAuraModule extends Module {
 
     private float resolveBasePitch(Minecraft minecraft) {
         return Float.isNaN(KillAuraRotationUtils.serverRotations[1]) ? minecraft.thePlayer.rotationPitch : KillAuraRotationUtils.serverRotations[1];
-    }
-
-    private void registerForge() {
-        if (forgeRegistered) {
-            return;
-        }
-        MinecraftForge.EVENT_BUS.register(this);
-        forgeRegistered = true;
-    }
-
-    private void unregisterForge() {
-        if (!forgeRegistered) {
-            return;
-        }
-        MinecraftForge.EVENT_BUS.unregister(this);
-        forgeRegistered = false;
     }
 
     private static java.lang.reflect.Field findRendererField(String... names) {

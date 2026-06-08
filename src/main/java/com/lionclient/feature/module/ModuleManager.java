@@ -13,7 +13,7 @@ import com.lionclient.feature.module.impl.ClickGuiModule;
 import com.lionclient.feature.module.impl.ClickRecorderModule;
 import com.lionclient.feature.module.impl.CleanScoreboardModule;
 import com.lionclient.feature.module.impl.ConfigModule;
-import com.lionclient.feature.module.impl.EagleModule;
+
 import com.lionclient.feature.module.impl.FullbrightModule;
 import com.lionclient.feature.module.impl.HudModule;
 import com.lionclient.feature.module.impl.KeystrokesModule;
@@ -29,6 +29,7 @@ import com.lionclient.feature.module.impl.ReachModule;
 import com.lionclient.feature.module.impl.RightClickerModule;
 import com.lionclient.feature.module.impl.SprintModule;
 import com.lionclient.feature.module.impl.TrajectoriesModule;
+import com.lionclient.feature.module.impl.TargetHudModule;
 import com.lionclient.feature.module.impl.TriggerBotModule;
 import com.lionclient.feature.module.impl.WTapModule;
 import java.util.ArrayList;
@@ -58,7 +59,6 @@ public final class ModuleManager {
         register(new BedPlatesModule());
         register(new BedBreakerModule());
         register(new LegitScaffoldModule());
-        register(new EagleModule());
         register(new AutoToolModule());
         register(new AutoClickerModule());
         register(new RightClickerModule());
@@ -83,6 +83,7 @@ public final class ModuleManager {
         register(new NameTagsModule());
         register(new CleanScoreboardModule());
         register(new TrajectoriesModule());
+        register(new TargetHudModule());
         configManager = new ConfigManager(this);
         configModule = new ConfigModule(configManager);
         register(configModule);

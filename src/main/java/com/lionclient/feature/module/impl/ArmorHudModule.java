@@ -4,6 +4,7 @@ import com.lionclient.feature.module.Category;
 import com.lionclient.feature.module.Module;
 import com.lionclient.feature.setting.BooleanSetting;
 import com.lionclient.feature.setting.EnumSetting;
+import com.lionclient.feature.setting.FloatSetting;
 import com.lionclient.feature.setting.NumberSetting;
 import com.lionclient.gui.HudElement;
 import net.minecraft.client.Minecraft;
@@ -26,11 +27,13 @@ public final class ArmorHudModule extends Module implements HudElement {
     private final EnumSetting<Direction> direction = new EnumSetting<Direction>("Direction", Direction.values(), Direction.HORIZONTAL);
     private final BooleanSetting showHeldItem = new BooleanSetting("Show Held Item", false);
     private final BooleanSetting showDurability = new BooleanSetting("Show Durability", true);
+    private final FloatSetting scale = new FloatSetting("Scale", 0.5F, 2.0F, 0.1F, 1.0F);
     private final NumberSetting hudX = new NumberSetting("X", 0, 4000, 1, 90);
     private final NumberSetting hudY = new NumberSetting("Y", 0, 4000, 1, 4000);
+    private final ItemStack[] pieces = new ItemStack[5];
 
     public ArmorHudModule() {
-        super("ArmorHUD", "Renders equipped armor pieces with durability.", Category.RENDER, Keyboard.KEY_NONE);
+        super("ArmorHUD", "Renders equipped armor pieces with durability.", Category.HUD, Keyboard.KEY_NONE);
         java.util.function.BooleanSupplier hidden = new java.util.function.BooleanSupplier() {
             @Override
             public boolean getAsBoolean() {
@@ -42,6 +45,7 @@ public final class ArmorHudModule extends Module implements HudElement {
         addSetting(direction);
         addSetting(showHeldItem);
         addSetting(showDurability);
+        addSetting(scale);
         addSetting(hudX);
         addSetting(hudY);
     }
@@ -55,7 +59,7 @@ public final class ArmorHudModule extends Module implements HudElement {
         }
 
         InventoryPlayer inv = player.inventory;
-        ItemStack[] pieces = new ItemStack[showHeldItem.isEnabled() ? 5 : 4];
+        int count = showHeldItem.isEnabled() ? 5 : 4;
         // Vanilla armor slots: 0 = boots, 1 = leggings, 2 = chest, 3 = helmet
         // Render head→feet so the slot order is reversed.
         pieces[0] = inv.armorInventory[3];
@@ -68,8 +72,8 @@ public final class ArmorHudModule extends Module implements HudElement {
 
         ScaledResolution res = event.resolution;
         boolean horizontal = direction.getValue() == Direction.HORIZONTAL;
-        int totalWidth = horizontal ? pieces.length * (ITEM_SIZE + ITEM_GAP) - ITEM_GAP : ITEM_SIZE;
-        int totalHeight = horizontal ? ITEM_SIZE : pieces.length * (ITEM_SIZE + ITEM_GAP) - ITEM_GAP;
+        int totalWidth = horizontal ? count * (ITEM_SIZE + ITEM_GAP) - ITEM_GAP : ITEM_SIZE;
+        int totalHeight = horizontal ? ITEM_SIZE : count * (ITEM_SIZE + ITEM_GAP) - ITEM_GAP;
         int anchorX = clamp(hudX.getValue(), 0, res.getScaledWidth() - totalWidth);
         int anchorY = clamp(hudY.getValue(), 0, res.getScaledHeight() - totalHeight);
 
@@ -77,7 +81,7 @@ public final class ArmorHudModule extends Module implements HudElement {
         RenderItem renderItem = minecraft.getRenderItem();
         RenderHelper.enableGUIStandardItemLighting();
 
-        for (int i = 0; i < pieces.length; i++) {
+        for (int i = 0; i < count; i++) {
             ItemStack stack = pieces[i];
             if (stack == null) {
                 continue;
@@ -153,12 +157,12 @@ public final class ArmorHudModule extends Module implements HudElement {
 
     @Override
     public int getHudWidth(ScaledResolution resolution) {
-        return getElementWidth();
+        return Math.round(getElementWidth() * scale.getValue());
     }
 
     @Override
     public int getHudHeight(ScaledResolution resolution) {
-        return getElementHeight();
+        return Math.round(getElementHeight() * scale.getValue());
     }
 
     @Override
@@ -170,6 +174,16 @@ public final class ArmorHudModule extends Module implements HudElement {
     public void setHudPosition(int x, int y) {
         hudX.setManualValue(x);
         hudY.setManualValue(y);
+    }
+
+    @Override
+    public float getHudScale() {
+        return scale.getValue();
+    }
+
+    @Override
+    public void setHudScale(float s) {
+        scale.setManualValue(s);
     }
 
     private enum Direction {

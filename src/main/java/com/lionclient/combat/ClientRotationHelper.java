@@ -1,6 +1,7 @@
 package com.lionclient.combat;
 
 import com.lionclient.event.ClientRotationEvent;
+import com.lionclient.event.EventBus;
 import com.lionclient.event.JumpEvent;
 import com.lionclient.event.StrafeEvent;
 import net.minecraft.client.Minecraft;
@@ -77,7 +78,7 @@ public final class ClientRotationHelper {
         }
 
         ClientRotationEvent event = new ClientRotationEvent(serverYaw, serverPitch);
-        MinecraftForge.EVENT_BUS.post(event);
+        EventBus.getInstance().post(event);
         serverYaw = event.yaw;
         serverPitch = event.pitch;
         if (serverYaw == null && serverPitch == null) {

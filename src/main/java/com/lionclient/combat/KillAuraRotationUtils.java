@@ -378,12 +378,17 @@ public final class KillAuraRotationUtils {
         return null;
     }
 
+    // Keep track of the last step to limit acceleration
+    private static float lastStepYaw;
+    private static float lastStepPitch;
+    private static final float MAX_ACCEL = 5.0F; // Degrees per tick^2
+
     public static float[] smoothRotation(float baseYaw, float basePitch, float targetYaw, float targetPitch, int speed, float randomizationPercent) {
         if (speed <= 0) {
             return new float[]{baseYaw, clampPitch(basePitch)};
         }
         if (speed >= 30) {
-            return new float[]{targetYaw, clampPitch(targetPitch)};
+            return fixRotation(targetYaw, targetPitch, baseYaw, basePitch);
         }
 
         float deltaYaw = MathHelper.wrapAngleTo180_float(targetYaw - baseYaw);
@@ -393,23 +398,31 @@ public final class KillAuraRotationUtils {
             return new float[]{targetYaw, clampPitch(targetPitch)};
         }
 
+        // Cubic-InOut Easing
         float t = speed / 30.0F;
-        float stepSize = t * t * 180.0F;
+        float ease = (t < 0.5f) ? 4 * t * t * t : 1 - (float)Math.pow(-2 * t + 2, 3) / 2;
+        float stepSize = ease * magnitude;
+
         float range = 0.6F * (randomizationPercent / 100.0F);
         float multiplier = range <= 0.001F ? 1.0F : 1.0F - range / 2.0F + (float) (Math.random() * range);
         stepSize *= multiplier;
-
-        float proximityFactor = Math.min(1.0F, magnitude / FAR_THRESHOLD);
-        proximityFactor = (float) Math.pow(proximityFactor, 0.7D);
-        float maxSlowdown = randomizationPercent / 100.0F;
-        float proximityMultiplier = Math.max(0.8F, 1.0F - maxSlowdown * (1.0F - proximityFactor));
-        stepSize *= proximityMultiplier;
 
         float stepLength = Math.min(stepSize, magnitude);
         float scale = stepLength / magnitude;
         float stepYaw = deltaYaw * scale;
         float stepPitch = deltaPitch * scale;
-        return new float[]{baseYaw + stepYaw, clampPitch(basePitch + stepPitch)};
+
+        // Mouse Acceleration Cap
+        float accelYaw = Math.abs(stepYaw - lastStepYaw);
+        float accelPitch = Math.abs(stepPitch - lastStepPitch);
+        if (accelYaw > MAX_ACCEL) stepYaw = lastStepYaw + Math.signum(stepYaw - lastStepYaw) * MAX_ACCEL;
+        if (accelPitch > MAX_ACCEL) stepPitch = lastStepPitch + Math.signum(stepPitch - lastStepPitch) * MAX_ACCEL;
+
+        lastStepYaw = stepYaw;
+        lastStepPitch = stepPitch;
+        
+        // Final GCD Fix
+        return fixRotation(baseYaw + stepYaw, basePitch + stepPitch, baseYaw, basePitch);
     }
 
     public static float[] fixRotation(float targetYaw, float targetPitch, float yaw, float pitch) {

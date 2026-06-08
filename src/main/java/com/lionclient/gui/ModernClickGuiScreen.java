@@ -1417,7 +1417,7 @@ public final class ModernClickGuiScreen extends GuiScreen {
     }
 
     private Bounds getDragBounds(Layout layout) {
-        return new Bounds(layout.windowX + 8, layout.windowY + 8, layout.windowX + 124, layout.windowY + HEADER_HEIGHT - 12);
+        return new Bounds(layout.windowX + 8, layout.windowY + 8, layout.windowX + 124, layout.windowY + 12);
     }
 
     private Bounds getBooleanControlBounds(Bounds rowBounds) {

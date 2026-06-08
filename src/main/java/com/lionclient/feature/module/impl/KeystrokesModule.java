@@ -4,6 +4,7 @@ import com.lionclient.feature.module.Category;
 import com.lionclient.feature.module.Module;
 import com.lionclient.feature.setting.BooleanSetting;
 import com.lionclient.feature.setting.ColorSetting;
+import com.lionclient.feature.setting.FloatSetting;
 import com.lionclient.feature.setting.NumberSetting;
 import com.lionclient.gui.HudElement;
 import net.minecraft.client.Minecraft;
@@ -15,6 +16,7 @@ import net.minecraft.client.settings.KeyBinding;
 import net.minecraftforge.client.event.RenderGameOverlayEvent;
 import org.lwjgl.input.Keyboard;
 import org.lwjgl.input.Mouse;
+import org.lwjgl.opengl.GL11;
 
 public final class KeystrokesModule extends Module implements HudElement {
     private static final int KEY_SIZE = 22;
@@ -27,9 +29,10 @@ public final class KeystrokesModule extends Module implements HudElement {
     private final ColorSetting idleColor = new ColorSetting("Idle Color", 0x66202020);
     private final ColorSetting pressColor = new ColorSetting("Pressed Color", 0xCC4FB3FF);
     private final ColorSetting textColor = new ColorSetting("Text Color", 0xFFF0F0F0);
+    private final FloatSetting scale = new FloatSetting("Scale", 0.5F, 2.0F, 0.1F, 1.0F);
 
     public KeystrokesModule() {
-        super("Keystrokes", "Renders WASD, mouse and space inputs on the HUD.", Category.RENDER, Keyboard.KEY_NONE);
+        super("Keystrokes", "Renders WASD, mouse and space inputs on the HUD.", Category.HUD, Keyboard.KEY_NONE);
         java.util.function.BooleanSupplier hidden = new java.util.function.BooleanSupplier() {
             @Override
             public boolean getAsBoolean() {
@@ -45,6 +48,7 @@ public final class KeystrokesModule extends Module implements HudElement {
         addSetting(idleColor);
         addSetting(pressColor);
         addSetting(textColor);
+        addSetting(scale);
     }
 
     @Override
@@ -55,8 +59,12 @@ public final class KeystrokesModule extends Module implements HudElement {
         }
 
         ScaledResolution res = event.resolution;
-        int anchorX = clampX(hudX.getValue(), res.getScaledWidth());
-        int anchorY = clampY(hudY.getValue(), res.getScaledHeight());
+        float s = scale.getValue();
+        int anchorX = Math.round(hudX.getValue() / s);
+        int anchorY = Math.round(hudY.getValue() / s);
+
+        GL11.glPushMatrix();
+        GL11.glScalef(s, s, 1.0F);
 
         GameSettings gs = minecraft.gameSettings;
         FontRenderer font = minecraft.fontRendererObj;
@@ -82,6 +90,7 @@ public final class KeystrokesModule extends Module implements HudElement {
             int wide = KEY_SIZE * 3 + KEY_GAP * 2;
             drawKeyWide(font, anchorX, nextRowY, wide, "____", isPressed(gs.keyBindJump));
         }
+        GL11.glPopMatrix();
     }
 
     private boolean isPressed(KeyBinding binding) {
@@ -158,12 +167,12 @@ public final class KeystrokesModule extends Module implements HudElement {
 
     @Override
     public int getHudWidth(ScaledResolution resolution) {
-        return getElementWidth();
+        return Math.round(getElementWidth() * scale.getValue());
     }
 
     @Override
     public int getHudHeight(ScaledResolution resolution) {
-        return getElementHeight();
+        return Math.round(getElementHeight() * scale.getValue());
     }
 
     @Override
@@ -175,5 +184,15 @@ public final class KeystrokesModule extends Module implements HudElement {
     public void setHudPosition(int x, int y) {
         hudX.setManualValue(x);
         hudY.setManualValue(y);
+    }
+
+    @Override
+    public float getHudScale() {
+        return scale.getValue();
+    }
+
+    @Override
+    public void setHudScale(float s) {
+        scale.setManualValue(s);
     }
 }
