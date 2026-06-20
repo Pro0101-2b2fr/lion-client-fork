@@ -243,18 +243,33 @@ public final class TriggerBotModule extends Module {
             return false;
         }
 
-        // Scoreboard team check.
-        Team myTeam = player.getTeam();
-        Team theirTeam = other.getTeam();
-        if (myTeam != null && theirTeam != null && myTeam == theirTeam) {
-            return true;
+        try {
+            // Scoreboard team check - wrapped for vanilla scoreboard race condition
+            Team myTeam = player.getTeam();
+            Team theirTeam = other.getTeam();
+            if (myTeam != null && theirTeam != null) {
+                String myTeamName = myTeam.getRegisteredName();
+                String theirTeamName = theirTeam.getRegisteredName();
+                if (myTeamName != null && myTeamName.equals(theirTeamName)) {
+                    return true;
+                }
+                if (myTeam == theirTeam) {
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            // Scoreboard in invalid state, fall back to color prefix
         }
 
         // Name color prefix check (common on Hypixel, etc.).
-        String myPrefix = getColorPrefix(player);
-        String theirPrefix = getColorPrefix(other);
-        if (myPrefix != null && myPrefix.equals(theirPrefix) && !myPrefix.isEmpty()) {
-            return true;
+        try {
+            String myPrefix = getColorPrefix(player);
+            String theirPrefix = getColorPrefix(other);
+            if (myPrefix != null && myPrefix.equals(theirPrefix) && !myPrefix.isEmpty()) {
+                return true;
+            }
+        } catch (Exception e) {
+            // Ignore formatting errors
         }
 
         return false;

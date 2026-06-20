@@ -1,10 +1,10 @@
 package com.lionclient.mixin;
 
 import com.lionclient.combat.ClientRotationHelper;
+import com.lionclient.event.EventBus;
 import com.lionclient.event.PrePlayerInputEvent;
 import net.minecraft.client.settings.GameSettings;
 import net.minecraft.util.MovementInput;
-import net.minecraftforge.common.MinecraftForge;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Overwrite;
@@ -42,7 +42,7 @@ public abstract class MixinMovementInputFromOptions extends MovementInput {
         this.sneak = this.gameSettings.keyBindSneak.isKeyDown();
 
         PrePlayerInputEvent event = new PrePlayerInputEvent(this.moveForward, this.moveStrafe, this.jump, this.sneak);
-        MinecraftForge.EVENT_BUS.post(event);
+        EventBus.getInstance().post(event);
 
         this.moveForward = event.getForward();
         this.moveStrafe = event.getStrafe();

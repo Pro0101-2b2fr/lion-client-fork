@@ -1,6 +1,7 @@
 package com.lionclient.mixin;
 
 import com.lionclient.combat.ClientRotationHelper;
+import com.lionclient.event.EventBus;
 import com.lionclient.event.PrePlayerInteractEvent;
 import com.lionclient.event.RunTickStartEvent;
 import net.minecraftforge.common.MinecraftForge;
@@ -25,6 +26,6 @@ public abstract class MixinMinecraft {
 
     @Inject(method = "runTick", at = @At(value = "FIELD", opcode = Opcodes.GETFIELD, target = "Lnet/minecraft/client/settings/GameSettings;chatVisibility:Lnet/minecraft/entity/player/EntityPlayer$EnumChatVisibility;"))
     private void lionclient$beforePlayerInteract(CallbackInfo callbackInfo) {
-        MinecraftForge.EVENT_BUS.post(new PrePlayerInteractEvent());
+        EventBus.getInstance().post(new PrePlayerInteractEvent());
     }
 }

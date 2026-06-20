@@ -24,6 +24,11 @@ public final class ClientRotationHelper {
     private float savedPrevYaw;
     private float savedPrevPitch;
 
+    // Priority rotation: when set, other modules (like KillAura) should not override
+    private boolean priorityRotationActive;
+    private Float priorityYaw;
+    private Float priorityPitch;
+
     public boolean swappedForMouseOver;
     private boolean swappedForWalkingUpdate;
 
@@ -58,12 +63,45 @@ public final class ClientRotationHelper {
         rotationsUpdatedThisTick = false;
         swappedForMouseOver = false;
         swappedForWalkingUpdate = false;
+        priorityRotationActive = false;
+        priorityYaw = null;
+        priorityPitch = null;
     }
 
     public void clearRequestedRotations() {
         serverYaw = null;
         serverPitch = null;
         setRotations = false;
+    }
+
+    /**
+     * Set a priority rotation that other modules should not override.
+     * Used by Clutch and AntiFireball for critical rotation-before-action timing.
+     */
+    public void setPriorityRotation(float yaw, float pitch) {
+        this.priorityRotationActive = true;
+        this.priorityYaw = Float.valueOf(yaw);
+        this.priorityPitch = Float.valueOf(pitch);
+    }
+
+    public boolean hasPriorityRotation() {
+        return priorityRotationActive;
+    }
+
+    public void clearPriorityRotation() {
+        priorityRotationActive = false;
+        priorityYaw = null;
+        priorityPitch = null;
+    }
+
+    /**
+     * Set server-side rotations. These will be applied during onUpdateWalkingPlayer
+     * and sent in the C06 packet. Used by AimAssist SERVER mode.
+     */
+    public void setServerRotations(float yaw, float pitch) {
+        this.serverYaw = Float.valueOf(yaw);
+        this.serverPitch = Float.valueOf(pitch);
+        updateServerRotations();
     }
 
     public void updateServerRotations() {

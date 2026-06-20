@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Random;
 import net.minecraft.client.Minecraft;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityLivingBase;
@@ -11,24 +12,28 @@ import net.minecraft.util.AxisAlignedBB;
 import net.minecraft.util.MathHelper;
 import net.minecraft.util.MovingObjectPosition;
 import net.minecraft.util.Vec3;
+import com.lionclient.util.MouseGcdHelper;
 
+/**
+ * KillAuraRotationUtils — rotation math for KillAura and Clutch.
+ *
+ * Key improvements for anti-cheat bypass:
+ * 1. GCD formula is vanilla-correct: (sens * 0.6 + 0.2)^3 * 1.2
+ * 2. RotationState per-module (no shared static state between modules)
+ * 3. Hermite smoothstep easing (natural S-curve, no cubic patterns)
+ * 4. Per-axis independent speeds (yaw/pitch don't move identically)
+ * 5. Acceleration limiting (no instant direction changes)
+ * 6. Smooth return to original position (no snap back)
+ * 7. No pitch bias (removed +3.0f fingerprint)
+ */
 public final class KillAuraRotationUtils {
     private static final Minecraft MINECRAFT = Minecraft.getMinecraft();
     private static final double BACKUP_FACE_INSET = 0.05D;
     private static final int BACKUP_TARGET_TOTAL = 30;
-    private static final float FAR_THRESHOLD = 180.0F;
 
     public static final float[] serverRotations = new float[]{Float.NaN, Float.NaN};
 
-    /**
-     * Returns the shared rotation state. Prefer this over the raw array.
-     */
-    public static RotationState getRotationState() {
-        return RotationState.get();
-    }
-
-    private KillAuraRotationUtils() {
-    }
+    private KillAuraRotationUtils() {}
 
     public static float clampPitch(float pitch) {
         return MathHelper.clamp_float(pitch, -90.0F, 90.0F);
@@ -42,10 +47,12 @@ public final class KillAuraRotationUtils {
         return new Vec3(yawSin * pitchCos, pitchSin, yawCos * pitchCos);
     }
 
+    /**
+     * Calculates rotations to look at a 3D point.
+     * No pitch bias — the old +3.0f was a detectable fingerprint.
+     */
     public static float[] getRotationsToPoint(double x, double y, double z, float baseYaw, float basePitch) {
-        if (MINECRAFT.thePlayer == null) {
-            return null;
-        }
+        if (MINECRAFT.thePlayer == null) return null;
 
         double deltaX = x - MINECRAFT.thePlayer.posX;
         double deltaZ = z - MINECRAFT.thePlayer.posZ;
@@ -64,22 +71,27 @@ public final class KillAuraRotationUtils {
             targetPitch = (float) (-(Math.atan2(deltaY, horizontalDistance) * 57.295780181884766D));
         }
 
-        float pitch = basePitch + MathHelper.wrapAngleTo180_float(targetPitch - basePitch) + 3.0F;
+        float pitch = basePitch + MathHelper.wrapAngleTo180_float(targetPitch - basePitch);
         return new float[]{yaw, clampPitch(pitch)};
     }
 
     public static float[] getRotations(Entity entity, double horizontalMultipoint, double verticalMultipoint, float baseYaw, float basePitch) {
         Vec3 aimPoint = getAimPoint(entity, horizontalMultipoint, verticalMultipoint);
-        if (aimPoint == null) {
-            return null;
-        }
+        if (aimPoint == null) return null;
         return getRotationsToPoint(aimPoint.xCoord, aimPoint.yCoord, aimPoint.zCoord, baseYaw, basePitch);
     }
 
     public static Vec3 getAimPoint(Entity entity, double horizontalMultipoint, double verticalMultipoint) {
-        if (entity == null || MINECRAFT.thePlayer == null) {
-            return null;
-        }
+        return getAimPoint(entity, horizontalMultipoint, verticalMultipoint, 0.0D, null);
+    }
+
+    /**
+     * Aim point calculation with optional gaussian randomization.
+     * Randomization spreads impact points within the hitbox to look human.
+     */
+    public static Vec3 getAimPoint(Entity entity, double horizontalMultipoint, double verticalMultipoint,
+                                   double aimPointRandomization, Random rng) {
+        if (entity == null || MINECRAFT.thePlayer == null) return null;
 
         float borderSize = entity.getCollisionBorderSize();
         AxisAlignedBB bb = entity.getEntityBoundingBox().expand(borderSize, borderSize, borderSize);
@@ -100,6 +112,20 @@ public final class KillAuraRotationUtils {
         double targetX = centerX + (closest.xCoord - centerX) * horizontalFactor;
         double targetY = centerY + (closest.yCoord - centerY) * verticalFactor;
         double targetZ = centerZ + (closest.zCoord - centerZ) * horizontalFactor;
+
+        // Gaussian randomization within hitbox
+        if (aimPointRandomization > 0.001D && rng != null) {
+            double halfX = (bb.maxX - bb.minX) * 0.5D;
+            double halfY = (bb.maxY - bb.minY) * 0.5D;
+            double halfZ = (bb.maxZ - bb.minZ) * 0.5D;
+            double rx = rng.nextGaussian() * aimPointRandomization * halfX;
+            double ry = rng.nextGaussian() * aimPointRandomization * halfY;
+            double rz = rng.nextGaussian() * aimPointRandomization * halfZ;
+            targetX = Math.max(bb.minX, Math.min(bb.maxX, targetX + rx));
+            targetY = Math.max(bb.minY, Math.min(bb.maxY, targetY + ry));
+            targetZ = Math.max(bb.minZ, Math.min(bb.maxZ, targetZ + rz));
+        }
+
         return new Vec3(targetX, targetY, targetZ);
     }
 
@@ -111,10 +137,8 @@ public final class KillAuraRotationUtils {
     }
 
     public static List<Vec3> buildBackupPoints(Entity entity, Vec3 eye) {
-        List<Vec3> points = new ArrayList<Vec3>();
-        if (entity == null || MINECRAFT.thePlayer == null) {
-            return points;
-        }
+        List<Vec3> points = new ArrayList<>();
+        if (entity == null || MINECRAFT.thePlayer == null) return points;
 
         float borderSize = entity.getCollisionBorderSize();
         AxisAlignedBB bb = entity.getEntityBoundingBox().expand(borderSize, borderSize, borderSize);
@@ -130,9 +154,7 @@ public final class KillAuraRotationUtils {
         boolean zNeg = eye.zCoord < bb.minZ;
 
         int visibleFaceCount = (xPos || xNeg ? 1 : 0) + (yPos || yNeg ? 1 : 0) + (zPos || zNeg ? 1 : 0);
-        if (visibleFaceCount == 0) {
-            return points;
-        }
+        if (visibleFaceCount == 0) return points;
 
         int pointsPerFace = BACKUP_TARGET_TOTAL / visibleFaceCount;
         if (xPos || xNeg) {
@@ -147,7 +169,6 @@ public final class KillAuraRotationUtils {
             double fixedZ = zPos ? bb.maxZ - BACKUP_FACE_INSET : bb.minZ + BACKUP_FACE_INSET;
             addFaceGrid(points, 2, fixedZ, bb.minX + BACKUP_FACE_INSET, bb.maxX - BACKUP_FACE_INSET, bb.minY + BACKUP_FACE_INSET, bb.maxY - BACKUP_FACE_INSET, pointsPerFace, sizeX, sizeY);
         }
-
         return points;
     }
 
@@ -155,16 +176,11 @@ public final class KillAuraRotationUtils {
         if (dimU < 1.0E-4D || dimV < 1.0E-4D) {
             double uMid = (uMin + uMax) / 2.0D;
             double vMid = (vMin + vMax) / 2.0D;
-            if (fixedAxis == 0) {
-                output.add(new Vec3(fixedValue, uMid, vMid));
-            } else if (fixedAxis == 1) {
-                output.add(new Vec3(uMid, fixedValue, vMid));
-            } else {
-                output.add(new Vec3(uMid, vMid, fixedValue));
-            }
+            if (fixedAxis == 0) output.add(new Vec3(fixedValue, uMid, vMid));
+            else if (fixedAxis == 1) output.add(new Vec3(uMid, fixedValue, vMid));
+            else output.add(new Vec3(uMid, vMid, fixedValue));
             return;
         }
-
         double ratio = dimU / dimV;
         int gridU = Math.max(2, (int) Math.round(Math.sqrt(targetPoints * ratio)));
         int gridV = Math.max(2, (int) Math.round(Math.sqrt(targetPoints / ratio)));
@@ -172,22 +188,15 @@ public final class KillAuraRotationUtils {
             double u = uMin + (uMax - uMin) * i / (gridU - 1);
             for (int j = 0; j < gridV; j++) {
                 double v = vMin + (vMax - vMin) * j / (gridV - 1);
-                if (fixedAxis == 0) {
-                    output.add(new Vec3(fixedValue, u, v));
-                } else if (fixedAxis == 1) {
-                    output.add(new Vec3(u, fixedValue, v));
-                } else {
-                    output.add(new Vec3(u, v, fixedValue));
-                }
+                if (fixedAxis == 0) output.add(new Vec3(fixedValue, u, v));
+                else if (fixedAxis == 1) output.add(new Vec3(u, fixedValue, v));
+                else output.add(new Vec3(u, v, fixedValue));
             }
         }
     }
 
     public static double distanceSqFromEyeToClosestOnAABB(Entity entity) {
-        if (entity == null || MINECRAFT.thePlayer == null) {
-            return Double.MAX_VALUE;
-        }
-
+        if (entity == null || MINECRAFT.thePlayer == null) return Double.MAX_VALUE;
         Vec3 eye = MINECRAFT.thePlayer.getPositionEyes(1.0F);
         float borderSize = entity.getCollisionBorderSize();
         AxisAlignedBB bb = entity.getEntityBoundingBox().expand(borderSize, borderSize, borderSize);
@@ -199,84 +208,54 @@ public final class KillAuraRotationUtils {
     }
 
     public static double distanceFromEyeToClosestOnAABB(Entity entity) {
-        double distanceSq = distanceSqFromEyeToClosestOnAABB(entity);
-        return distanceSq == Double.MAX_VALUE ? Double.MAX_VALUE : Math.sqrt(distanceSq);
+        double d = distanceSqFromEyeToClosestOnAABB(entity);
+        return d == Double.MAX_VALUE ? Double.MAX_VALUE : Math.sqrt(d);
     }
 
     public static boolean canAimAtPoint(Vec3 eye, Vec3 point, Entity target, double range, boolean allowThroughBlocks, boolean allowThroughEntities) {
-        if (target == null) {
-            return false;
-        }
-
+        if (target == null) return false;
         double dx = point.xCoord - eye.xCoord;
         double dy = point.yCoord - eye.yCoord;
         double dz = point.zCoord - eye.zCoord;
         double length = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        if (length < 1.0E-6D) {
-            return false;
-        }
-
+        if (length < 1.0E-6D) return false;
         double scale = range / length;
         Vec3 end = new Vec3(eye.xCoord + dx * scale, eye.yCoord + dy * scale, eye.zCoord + dz * scale);
         float borderSize = target.getCollisionBorderSize();
         AxisAlignedBB aabb = target.getEntityBoundingBox().expand(borderSize, borderSize, borderSize);
         MovingObjectPosition entityHit = aabb.calculateIntercept(eye, end);
-        if (entityHit == null) {
-            return false;
-        }
-
+        if (entityHit == null) return false;
         double entityDistanceSq = eye.squareDistanceTo(entityHit.hitVec);
         if (!allowThroughBlocks) {
             MovingObjectPosition blockHit = MINECRAFT.theWorld.rayTraceBlocks(eye, end, false, false, false);
             if (blockHit != null && blockHit.typeOfHit == MovingObjectPosition.MovingObjectType.BLOCK) {
                 double blockDistanceSq = eye.squareDistanceTo(blockHit.hitVec);
-                if (blockDistanceSq < entityDistanceSq) {
-                    return false;
-                }
+                if (blockDistanceSq < entityDistanceSq) return false;
             }
         }
-
         return allowThroughEntities || !hasEntityBlockingPath(eye, end, target, entityDistanceSq);
     }
 
     private static boolean hasEntityBlockingPath(Vec3 eye, Vec3 end, Entity target, double targetDistanceSq) {
-        if (MINECRAFT.thePlayer == null || MINECRAFT.theWorld == null) {
-            return false;
-        }
-
+        if (MINECRAFT.thePlayer == null || MINECRAFT.theWorld == null) return false;
         Vec3 delta = end.subtract(eye);
         AxisAlignedBB searchBox = MINECRAFT.thePlayer.getEntityBoundingBox().addCoord(delta.xCoord, delta.yCoord, delta.zCoord).expand(1.0D, 1.0D, 1.0D);
         List<?> entities = MINECRAFT.theWorld.getEntitiesWithinAABBExcludingEntity(MINECRAFT.thePlayer, searchBox);
         for (Object object : entities) {
-            if (!(object instanceof Entity)) {
-                continue;
-            }
-
+            if (!(object instanceof Entity)) continue;
             Entity entity = (Entity) object;
-            if (entity == target || entity.isDead || !entity.canBeCollidedWith()) {
-                continue;
-            }
-
+            if (entity == target || entity.isDead || !entity.canBeCollidedWith()) continue;
             float border = entity.getCollisionBorderSize();
             AxisAlignedBB bb = entity.getEntityBoundingBox().expand(border, border, border);
             MovingObjectPosition hit = bb.calculateIntercept(eye, end);
-            if (bb.isVecInside(eye)) {
-                return true;
-            }
-            if (hit != null) {
-                double entityDistanceSq = eye.squareDistanceTo(hit.hitVec);
-                if (entityDistanceSq < targetDistanceSq - 1.0E-7D) {
-                    return true;
-                }
-            }
+            if (bb.isVecInside(eye)) return true;
+            if (hit != null && eye.squareDistanceTo(hit.hitVec) < targetDistanceSq - 1.0E-7D) return true;
         }
         return false;
     }
 
     public static boolean isPathBlockedByEntity(Vec3 eye, Vec3 hitVec, Entity target) {
-        if (eye == null || hitVec == null || target == null) {
-            return false;
-        }
+        if (eye == null || hitVec == null || target == null) return false;
         return hasEntityBlockingPath(eye, hitVec, target, eye.squareDistanceTo(hitVec));
     }
 
@@ -285,10 +264,7 @@ public final class KillAuraRotationUtils {
         double dy = point.yCoord - eye.yCoord;
         double dz = point.zCoord - eye.zCoord;
         double length = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        if (length < 1.0E-6D) {
-            return false;
-        }
-
+        if (length < 1.0E-6D) return false;
         double scale = range / length;
         Vec3 end = new Vec3(eye.xCoord + dx * scale, eye.yCoord + dy * scale, eye.zCoord + dz * scale);
         float borderSize = target.getCollisionBorderSize();
@@ -297,48 +273,39 @@ public final class KillAuraRotationUtils {
     }
 
     public static boolean hasValidAimPoint(Entity entity, double horizontalMultipoint, double verticalMultipoint, double range, boolean allowThroughBlocks, boolean allowThroughEntities) {
-        if (entity == null || MINECRAFT.thePlayer == null) {
-            return false;
-        }
-
+        if (entity == null || MINECRAFT.thePlayer == null) return false;
         Vec3 mainPoint = getAimPoint(entity, horizontalMultipoint, verticalMultipoint);
-        if (mainPoint == null) {
-            return false;
-        }
-
+        if (mainPoint == null) return false;
         Vec3 eye = MINECRAFT.thePlayer.getPositionEyes(1.0F);
-        if (eye.squareDistanceTo(mainPoint) < 1.0E-6D) {
-            return true;
-        }
-        if (!mainRayHitsTargetAABB(eye, mainPoint, entity, range)) {
-            return false;
-        }
-        if (canAimAtPoint(eye, mainPoint, entity, range, allowThroughBlocks, allowThroughEntities)) {
-            return true;
-        }
-
+        if (eye.squareDistanceTo(mainPoint) < 1.0E-6D) return true;
+        if (!mainRayHitsTargetAABB(eye, mainPoint, entity, range)) return false;
+        if (canAimAtPoint(eye, mainPoint, entity, range, allowThroughBlocks, allowThroughEntities)) return true;
         List<Vec3> backups = buildBackupPoints(entity, eye);
-        Collections.sort(backups, Comparator.comparingDouble(new java.util.function.ToDoubleFunction<Vec3>() {
-            @Override
-            public double applyAsDouble(Vec3 point) {
-                double dx = point.xCoord - eye.xCoord;
-                double dy = point.yCoord - eye.yCoord;
-                double dz = point.zCoord - eye.zCoord;
-                return dx * dx + dy * dy + dz * dz;
-            }
+        Collections.sort(backups, Comparator.comparingDouble(point -> {
+            double dx = point.xCoord - eye.xCoord;
+            double dy = point.yCoord - eye.yCoord;
+            double dz = point.zCoord - eye.zCoord;
+            return dx * dx + dy * dy + dz * dz;
         }));
         for (Vec3 point : backups) {
-            if (canAimAtPoint(eye, point, entity, range, allowThroughBlocks, allowThroughEntities)) {
-                return true;
-            }
+            if (canAimAtPoint(eye, point, entity, range, allowThroughBlocks, allowThroughEntities)) return true;
         }
         return false;
     }
 
-    public static float[] getRotationsWithBackup(Entity entity, double horizontalMultipoint, double verticalMultipoint, float baseYaw, float basePitch, double range, boolean allowThroughBlocks, boolean allowThroughEntities) {
-        if (entity == null || MINECRAFT.thePlayer == null) {
-            return null;
-        }
+    public static float[] getRotationsWithBackup(Entity entity, double horizontalMultipoint, double verticalMultipoint,
+                                                  float baseYaw, float basePitch, double range,
+                                                  boolean allowThroughBlocks, boolean allowThroughEntities) {
+        return getRotationsWithBackup(entity, horizontalMultipoint, verticalMultipoint, baseYaw, basePitch, range,
+                allowThroughBlocks, allowThroughEntities, 0.0D, false, 0.0F, new Random());
+    }
+
+    public static float[] getRotationsWithBackup(Entity entity, double horizontalMultipoint, double verticalMultipoint,
+                                                  float baseYaw, float basePitch, double range,
+                                                  boolean allowThroughBlocks, boolean allowThroughEntities,
+                                                  double aimPointRandomization, boolean randomizationEnabled,
+                                                  float rotationRandomization, Random rng) {
+        if (entity == null || MINECRAFT.thePlayer == null) return null;
 
         Vec3 eye = MINECRAFT.thePlayer.getPositionEyes(1.0F);
         float borderSize = entity.getCollisionBorderSize();
@@ -349,10 +316,10 @@ public final class KillAuraRotationUtils {
             return getRotationsToPoint(centerX, eye.yCoord, centerZ, baseYaw, basePitch);
         }
 
-        Vec3 mainPoint = getAimPoint(entity, horizontalMultipoint, verticalMultipoint);
-        if (mainPoint == null || eye.squareDistanceTo(mainPoint) < 1.0E-6D) {
-            return null;
-        }
+        Vec3 mainPoint = getAimPoint(entity, horizontalMultipoint, verticalMultipoint,
+                randomizationEnabled ? aimPointRandomization : 0.0D,
+                randomizationEnabled ? rng : null);
+        if (mainPoint == null || eye.squareDistanceTo(mainPoint) < 1.0E-6D) return null;
         if (!mainRayHitsTargetAABB(eye, mainPoint, entity, range)) {
             return getRotationsToPoint(mainPoint.xCoord, mainPoint.yCoord, mainPoint.zCoord, baseYaw, basePitch);
         }
@@ -361,14 +328,11 @@ public final class KillAuraRotationUtils {
         }
 
         List<Vec3> backups = buildBackupPoints(entity, eye);
-        Collections.sort(backups, Comparator.comparingDouble(new java.util.function.ToDoubleFunction<Vec3>() {
-            @Override
-            public double applyAsDouble(Vec3 point) {
-                double dx = point.xCoord - eye.xCoord;
-                double dy = point.yCoord - eye.yCoord;
-                double dz = point.zCoord - eye.zCoord;
-                return dx * dx + dy * dy + dz * dz;
-            }
+        Collections.sort(backups, Comparator.comparingDouble(point -> {
+            double dx = point.xCoord - eye.xCoord;
+            double dy = point.yCoord - eye.yCoord;
+            double dz = point.zCoord - eye.zCoord;
+            return dx * dx + dy * dy + dz * dz;
         }));
         for (Vec3 point : backups) {
             if (canAimAtPoint(eye, point, entity, range, allowThroughBlocks, allowThroughEntities)) {
@@ -378,59 +342,15 @@ public final class KillAuraRotationUtils {
         return null;
     }
 
-    // Keep track of the last step to limit acceleration
-    private static float lastStepYaw;
-    private static float lastStepPitch;
-    private static final float MAX_ACCEL = 5.0F; // Degrees per tick^2
-
-    public static float[] smoothRotation(float baseYaw, float basePitch, float targetYaw, float targetPitch, int speed, float randomizationPercent) {
-        if (speed <= 0) {
-            return new float[]{baseYaw, clampPitch(basePitch)};
-        }
-        if (speed >= 30) {
-            return fixRotation(targetYaw, targetPitch, baseYaw, basePitch);
-        }
-
-        float deltaYaw = MathHelper.wrapAngleTo180_float(targetYaw - baseYaw);
-        float deltaPitch = targetPitch - basePitch;
-        float magnitude = (float) MathHelper.sqrt_double(deltaYaw * deltaYaw + deltaPitch * deltaPitch);
-        if (magnitude < 0.001F) {
-            return new float[]{targetYaw, clampPitch(targetPitch)};
-        }
-
-        // Cubic-InOut Easing
-        float t = speed / 30.0F;
-        float ease = (t < 0.5f) ? 4 * t * t * t : 1 - (float)Math.pow(-2 * t + 2, 3) / 2;
-        float stepSize = ease * magnitude;
-
-        float range = 0.6F * (randomizationPercent / 100.0F);
-        float multiplier = range <= 0.001F ? 1.0F : 1.0F - range / 2.0F + (float) (Math.random() * range);
-        stepSize *= multiplier;
-
-        float stepLength = Math.min(stepSize, magnitude);
-        float scale = stepLength / magnitude;
-        float stepYaw = deltaYaw * scale;
-        float stepPitch = deltaPitch * scale;
-
-        // Mouse Acceleration Cap
-        float accelYaw = Math.abs(stepYaw - lastStepYaw);
-        float accelPitch = Math.abs(stepPitch - lastStepPitch);
-        if (accelYaw > MAX_ACCEL) stepYaw = lastStepYaw + Math.signum(stepYaw - lastStepYaw) * MAX_ACCEL;
-        if (accelPitch > MAX_ACCEL) stepPitch = lastStepPitch + Math.signum(stepPitch - lastStepPitch) * MAX_ACCEL;
-
-        lastStepYaw = stepYaw;
-        lastStepPitch = stepPitch;
-        
-        // Final GCD Fix
-        return fixRotation(baseYaw + stepYaw, basePitch + stepPitch, baseYaw, basePitch);
-    }
-
+    /**
+     * Vanilla-correct GCD fix — uses MouseGcdHelper for consistent formula.
+     */
     public static float[] fixRotation(float targetYaw, float targetPitch, float yaw, float pitch) {
         targetYaw = ClientRotationHelper.unwrapYaw(targetYaw, yaw);
         float yawDelta = targetYaw - yaw;
         float pitchDelta = targetPitch - pitch;
-        float sensitivity = MINECRAFT.gameSettings.mouseSensitivity * 0.6F + 0.2F;
-        double gcd = sensitivity * sensitivity * sensitivity * 1.2D;
+        double gcd = MouseGcdHelper.currentGcd();
+        if (gcd < 1.0E-6D) gcd = 1.0E-6D;
         float snappedYaw = (float) (Math.round(yawDelta / gcd) * gcd);
         float snappedPitch = (float) (Math.round(pitchDelta / gcd) * gcd);
         return new float[]{yaw + snappedYaw, clampPitch(pitch + snappedPitch)};

@@ -24,7 +24,7 @@ import net.minecraftforge.fml.common.gameevent.TickEvent;
 public final class LionClient {
     public static final String MOD_ID = "lionclient";
     public static final String NAME = "LionClient";
-    public static final String VERSION = "1.1.1";
+    public static final String VERSION = "1.1.2";
 
     private static LionClient instance;
     private final ModuleManager moduleManager = new ModuleManager();
@@ -136,5 +136,13 @@ public final class LionClient {
     @SubscribeEvent
     public void onRenderOverlay(RenderGameOverlayEvent.Text event) {
         moduleManager.onRenderOverlay(event);
+    }
+
+    /**
+     * Checks if a player is a friend (for Chams, NameTags, etc.).
+     * Currently returns false - can be extended with a friend system.
+     */
+    public static boolean isFriend(String name) {
+        return false;
     }
 }

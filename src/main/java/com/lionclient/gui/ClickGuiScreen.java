@@ -160,7 +160,7 @@ public final class ClickGuiScreen extends GuiScreen {
 
             Gui.drawRect(x, y, x + WIDTH, y + HEADER_HEIGHT, 0xFF000000 | accent);
             Gui.drawRect(x, y + HEADER_HEIGHT, x + WIDTH, y + getContentHeight(), 0xB0101018);
-            fontRenderer.drawStringWithShadow(category.name(), x + 4, y + 4, 0xFFFFFFFF);
+            fontRenderer.drawStringWithShadow(category.getDisplayName(), x + 4, y + 4, 0xFFFFFFFF);
 
             int rowY = y + HEADER_HEIGHT;
             Module currentlyHoveredModule = null;

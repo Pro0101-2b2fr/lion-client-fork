@@ -2,10 +2,10 @@ package com.lionclient.feature.module.impl;
 
 import com.lionclient.combat.ClientRotationHelper;
 import com.lionclient.combat.KillAuraRotationUtils;
+import com.lionclient.combat.RotationState;
 import com.lionclient.event.ClientRotationEvent;
 import com.lionclient.event.EventBus;
 import com.lionclient.event.IEventListener;
-import com.lionclient.event.PrePlayerInputEvent;
 import com.lionclient.event.PrePlayerInteractEvent;
 import com.lionclient.feature.module.Category;
 import com.lionclient.feature.module.Module;
@@ -30,12 +30,14 @@ import net.minecraft.util.AxisAlignedBB;
 import net.minecraft.util.MathHelper;
 import net.minecraft.util.MovingObjectPosition;
 import net.minecraft.util.Vec3;
+import net.minecraft.network.play.client.C03PacketPlayer;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.event.entity.EntityJoinWorldEvent;
 import net.minecraftforge.fml.common.eventhandler.EventPriority;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 import net.minecraftforge.fml.common.gameevent.TickEvent;
 import net.minecraftforge.fml.relauncher.ReflectionHelper;
+import com.lionclient.combat.TargetPredictor;
 import org.lwjgl.input.Keyboard;
 
 public final class AntiFireballModule extends Module {
@@ -46,15 +48,22 @@ public final class AntiFireballModule extends Module {
     private final BooleanSetting onGround = new BooleanSetting("On Ground", false);
     private final BooleanSetting sneakWhileActive = new BooleanSetting("Sneak While Active", false);
 
+    // --- Target Prediction ---
+    private final BooleanSetting targetPrediction = new BooleanSetting("Target Prediction", true);
+    private final NumberSetting predictionLatency = new NumberSetting("Prediction Latency (ticks)", 0, 10, 1, 2);
+
     private final Set<Entity> trackedFireballs = new HashSet<Entity>();
     private final Random random = new Random();
+    private final RotationState rotationState;
     private final java.lang.reflect.Field pointedEntityField;
     private final IEventListener<ClientRotationEvent> rotationListener = this::onClientRotation;
-    private final IEventListener<PrePlayerInputEvent> inputListener = this::onPrePlayerInput;
     private final IEventListener<PrePlayerInteractEvent> interactListener = this::onPrePlayerInteract;
 
     private EntityFireball fireball;
     private long nextClickTime;
+    private float originalYaw = Float.NaN;
+    private float originalPitch = Float.NaN;
+    private long lastTickNanos = 0;
 
     public AntiFireballModule() {
         super("AntiFireball", "Automatically aims at and hits nearby fireballs.", Category.PLAYER, Keyboard.KEY_NONE);
@@ -64,7 +73,10 @@ public final class AntiFireballModule extends Module {
         addSetting(rotationSpeed);
         addSetting(onGround);
         addSetting(sneakWhileActive);
+        addSetting(targetPrediction);
+        addSetting(predictionLatency);
         pointedEntityField = findRendererField("field_78528_u", "pointedEntity");
+        rotationState = new RotationState(rotationSpeed.getValue(), 0.0F, random);
     }
 
     @Override
@@ -73,7 +85,6 @@ public final class AntiFireballModule extends Module {
         fireball = null;
         trackedFireballs.clear();
         EventBus.getInstance().register(ClientRotationEvent.class, rotationListener);
-        EventBus.getInstance().register(PrePlayerInputEvent.class, inputListener);
         EventBus.getInstance().register(PrePlayerInteractEvent.class, interactListener);
         seedTrackedFireballs();
     }
@@ -81,7 +92,6 @@ public final class AntiFireballModule extends Module {
     @Override
     protected void onDisable() {
         EventBus.getInstance().unregister(ClientRotationEvent.class, rotationListener);
-        EventBus.getInstance().unregister(PrePlayerInputEvent.class, inputListener);
         EventBus.getInstance().unregister(PrePlayerInteractEvent.class, interactListener);
         nextClickTime = 0L;
         fireball = null;
@@ -110,7 +120,20 @@ public final class AntiFireballModule extends Module {
 
     private void onClientRotation(ClientRotationEvent event) {
         Minecraft minecraft = Minecraft.getMinecraft();
+        rotationState.setSpeed(rotationSpeed.getValue());
         if (!shouldAim(minecraft)) {
+            if (!Float.isNaN(originalYaw)) {
+                rotationState.beginReturn(originalYaw, originalPitch);
+                float[] returned = rotationState.step();
+                event.yaw = Float.valueOf(returned[0]);
+                event.pitch = Float.valueOf(returned[1]);
+                if (rotationState.hasReturned(0.5F)) {
+                    originalYaw = Float.NaN;
+                    originalPitch = Float.NaN;
+                    rotationState.reset();
+                    ClientRotationHelper.get().clearRequestedRotations();
+                }
+            }
             return;
         }
 
@@ -121,30 +144,16 @@ public final class AntiFireballModule extends Module {
             return;
         }
 
-        float[] smooth = KillAuraRotationUtils.smoothRotation(
-            baseYaw,
-            basePitch,
-            targetRotations[0],
-            targetRotations[1],
-            rotationSpeed.getValue(),
-            0.0F
-        );
+        if (Float.isNaN(originalYaw)) {
+            originalYaw = baseYaw;
+            originalPitch = basePitch;
+        }
+
+        float deltaTime = calculateDeltaTime();
+        rotationState.setTarget(targetRotations[0], targetRotations[1], baseYaw, basePitch);
+        float[] smooth = rotationState.step(deltaTime);
         event.yaw = Float.valueOf(smooth[0]);
         event.pitch = Float.valueOf(smooth[1]);
-    }
-
-    private void onPrePlayerInput(PrePlayerInputEvent event) {
-        Minecraft minecraft = Minecraft.getMinecraft();
-        if (!shouldCancelMovement(minecraft)) {
-            return;
-        }
-
-        event.setForward(0.0F);
-        event.setStrafe(0.0F);
-        event.setJump(false);
-        if (sneakWhileActive.isEnabled() && !minecraft.thePlayer.isRiding() && !minecraft.thePlayer.capabilities.isFlying) {
-            event.setSneak(true);
-        }
     }
 
     private void onPrePlayerInteract(PrePlayerInteractEvent event) {
@@ -165,6 +174,17 @@ public final class AntiFireballModule extends Module {
         long now = System.currentTimeMillis();
         if (nextClickTime == 0L) {
             nextClickTime = now;
+        }
+
+        // CRITICAL: Force C03 rotation packet BEFORE C02 attack packet
+        // This prevents packet-order flags (rotation-before-action checks)
+        if (fireball != null) {
+            float[] currentRot = rotationState.step(calculateDeltaTime());
+            if (currentRot != null && !Float.isNaN(currentRot[0]) && !Float.isNaN(currentRot[1])) {
+                ClientRotationHelper rotHelper = ClientRotationHelper.get();
+                rotHelper.setServerRotations(currentRot[0], currentRot[1]);
+                rotHelper.updateServerRotations();
+            }
         }
 
         int key = minecraft.gameSettings.keyBindAttack.getKeyCode();
@@ -319,10 +339,15 @@ public final class AntiFireballModule extends Module {
         }
 
         double deltaX = point.xCoord - eye.xCoord;
+        double deltaY = point.yCoord - eye.yCoord;
         double deltaZ = point.zCoord - eye.zCoord;
         float targetYaw = (float) (Math.atan2(deltaZ, deltaX) * 57.295780181884766D) - 90.0F;
-        float yawDifference = Math.abs(MathHelper.wrapAngleTo180_float(targetYaw - minecraft.thePlayer.rotationYaw));
-        return yawDifference <= fovValue * 0.5F;
+        double horizontalDist = Math.sqrt(deltaX * deltaX + deltaZ * deltaZ);
+        float targetPitch = (float) (-Math.atan2(deltaY, horizontalDist) * 57.295780181884766D);
+        float yawDiff = Math.abs(MathHelper.wrapAngleTo180_float(targetYaw - minecraft.thePlayer.rotationYaw));
+        float pitchDiff = Math.abs(targetPitch - minecraft.thePlayer.rotationPitch);
+        float angle = (float) Math.sqrt(yawDiff * yawDiff + pitchDiff * pitchDiff);
+        return angle <= fovValue * 0.5F;
     }
 
     private float[] computeAimRotations(Minecraft minecraft, float baseYaw, float basePitch) {
@@ -334,6 +359,17 @@ public final class AntiFireballModule extends Module {
         float border = fireball.getCollisionBorderSize();
         AxisAlignedBB fireballBox = fireball.getEntityBoundingBox().expand(border, border, border);
         double reach = minecraft.playerController == null ? 3.0D : minecraft.playerController.getBlockReachDistance();
+
+        // Target prediction for fireball
+        if (targetPrediction.isEnabled()) {
+            int latencyTicks = predictionLatency.getValue();
+            if (latencyTicks > 0) {
+                float[] predicted = TargetPredictor.predictRotations(fireball, latencyTicks, baseYaw, basePitch);
+                if (predicted != null && hitsFireballBox(eye, predicted[0], predicted[1], fireballBox, reach)) {
+                    return predicted;
+                }
+            }
+        }
 
         List<EntityPlayer> players = new ArrayList<EntityPlayer>();
         for (EntityPlayer player : minecraft.theWorld.playerEntities) {
@@ -382,6 +418,20 @@ public final class AntiFireballModule extends Module {
         double variation = (random.nextDouble() - 0.5D) * baseDelay * 0.4D;
         long delay = Math.round(baseDelay + variation);
         return Math.max(33L, delay);
+    }
+
+    private float calculateDeltaTime() {
+        long now = System.nanoTime();
+        if (lastTickNanos == 0L) {
+            lastTickNanos = now;
+            return 0.016F; // Default ~60fps on first call
+        }
+        float dt = (now - lastTickNanos) / 1_000_000_000.0F;
+        lastTickNanos = now;
+        // Clamp to avoid huge jumps after alt-tab or lag spikes
+        if (dt < 0.001F) dt = 0.001F;
+        if (dt > 0.1F) dt = 0.1F;
+        return dt;
     }
 
     private float resolveBaseYaw(Minecraft minecraft) {

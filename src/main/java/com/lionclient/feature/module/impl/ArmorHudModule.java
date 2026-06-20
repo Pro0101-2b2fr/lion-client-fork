@@ -68,12 +68,17 @@ public final class ArmorHudModule extends Module implements HudElement {
         pieces[3] = inv.armorInventory[0];
         if (showHeldItem.isEnabled()) {
             pieces[4] = player.getHeldItem();
+        } else {
+            pieces[4] = null; // Prevent stale held item from being rendered
         }
 
         ScaledResolution res = event.resolution;
         boolean horizontal = direction.getValue() == Direction.HORIZONTAL;
-        int totalWidth = horizontal ? count * (ITEM_SIZE + ITEM_GAP) - ITEM_GAP : ITEM_SIZE;
-        int totalHeight = horizontal ? ITEM_SIZE : count * (ITEM_SIZE + ITEM_GAP) - ITEM_GAP;
+        float s = scale.getValue();
+        int scaledSize = Math.round(ITEM_SIZE * s);
+        int scaledGap = Math.round(ITEM_GAP * s);
+        int totalWidth = horizontal ? count * (scaledSize + scaledGap) - scaledGap : scaledSize;
+        int totalHeight = horizontal ? scaledSize : count * (scaledSize + scaledGap) - scaledGap;
         int anchorX = clamp(hudX.getValue(), 0, res.getScaledWidth() - totalWidth);
         int anchorY = clamp(hudY.getValue(), 0, res.getScaledHeight() - totalHeight);
 
@@ -86,14 +91,31 @@ public final class ArmorHudModule extends Module implements HudElement {
             if (stack == null) {
                 continue;
             }
-            int slotX = horizontal ? anchorX + i * (ITEM_SIZE + ITEM_GAP) : anchorX;
-            int slotY = horizontal ? anchorY : anchorY + i * (ITEM_SIZE + ITEM_GAP);
+            int slotX = horizontal ? anchorX + i * (scaledSize + scaledGap) : anchorX;
+            int slotY = horizontal ? anchorY : anchorY + i * (scaledSize + scaledGap);
 
-            renderItem.renderItemAndEffectIntoGUI(stack, slotX, slotY);
-            renderItem.renderItemOverlayIntoGUI(font, stack, slotX, slotY, null);
+            if (s != 1.0F) {
+                GL11.glPushMatrix();
+                GL11.glTranslatef(slotX, slotY, 0);
+                GL11.glScalef(s, s, 1.0F);
+                renderItem.renderItemAndEffectIntoGUI(stack, 0, 0);
+                renderItem.renderItemOverlayIntoGUI(font, stack, 0, 0, null);
+                GL11.glPopMatrix();
+            } else {
+                renderItem.renderItemAndEffectIntoGUI(stack, slotX, slotY);
+                renderItem.renderItemOverlayIntoGUI(font, stack, slotX, slotY, null);
+            }
 
             if (showDurability.isEnabled() && stack.getMaxDamage() > 0) {
-                drawDurability(font, stack, slotX, slotY);
+                if (s != 1.0F) {
+                    GL11.glPushMatrix();
+                    GL11.glTranslatef(slotX, slotY, 0);
+                    GL11.glScalef(s, s, 1.0F);
+                    drawDurability(font, stack, 0, 0);
+                    GL11.glPopMatrix();
+                } else {
+                    drawDurability(font, stack, slotX, slotY);
+                }
             }
         }
 
@@ -147,12 +169,14 @@ public final class ArmorHudModule extends Module implements HudElement {
 
     @Override
     public int getHudX() {
-        return hudX.getValue();
+        ScaledResolution res = new ScaledResolution(Minecraft.getMinecraft());
+        return clamp(hudX.getValue(), 0, res.getScaledWidth() - getHudWidth(res));
     }
 
     @Override
     public int getHudY() {
-        return hudY.getValue();
+        ScaledResolution res = new ScaledResolution(Minecraft.getMinecraft());
+        return clamp(hudY.getValue(), 0, res.getScaledHeight() - getHudHeight(res));
     }
 
     @Override

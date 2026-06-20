@@ -1,6 +1,7 @@
 package com.lionclient.feature.module.impl;
 
 import com.lionclient.combat.ClientRotationHelper;
+import com.lionclient.combat.RotationState;
 import com.lionclient.event.ClientRotationEvent;
 import com.lionclient.event.EventBus;
 import com.lionclient.event.IEventListener;
@@ -11,91 +12,78 @@ import com.lionclient.feature.setting.BooleanSetting;
 import com.lionclient.feature.setting.DecimalSetting;
 import com.lionclient.feature.setting.EnumSetting;
 import com.lionclient.feature.setting.NumberSetting;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.Random;
 import net.minecraft.block.Block;
-import net.minecraft.block.BlockLiquid;
-import net.minecraft.block.material.Material;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.item.ItemBlock;
 import net.minecraft.item.ItemStack;
+import net.minecraft.network.play.client.C03PacketPlayer;
 import net.minecraft.network.play.client.C09PacketHeldItemChange;
-import net.minecraft.util.AxisAlignedBB;
 import net.minecraft.util.BlockPos;
 import net.minecraft.util.EnumFacing;
 import net.minecraft.util.MathHelper;
 import net.minecraft.util.MovingObjectPosition;
-import org.lwjgl.input.Keyboard;
+import net.minecraft.util.Vec3;
+import net.minecraft.world.World;
 import net.minecraftforge.fml.common.gameevent.TickEvent;
+import org.lwjgl.input.Keyboard;
 
+/**
+ * Clutch — rewritten. Saves you from a fall by placing a block beneath your feet.
+ *
+ * <p>Design goals (lessons from the old bridge-pathfinder version + the anti-cheat
+ * flags it produced):</p>
+ * <ul>
+ *   <li>No pathfinding. Each tick it simply finds the block position under the
+ *       player and a solid face to click, then places one block there.</li>
+ *   <li>No extra packets. Rotations ride the normal movement packet through the
+ *       silent-rotation pipeline (or the visible rotation), never a separate C03.</li>
+ *   <li>Smooth, configurable rotation via {@link RotationState}.</li>
+ * </ul>
+ */
 public final class ClutchModule extends Module {
     private static final ClutchModule INSTANCE = new ClutchModule();
-    private static final EnumFacing[] SEARCH_DIRECTIONS = new EnumFacing[] {
-        EnumFacing.NORTH,
-        EnumFacing.SOUTH,
-        EnumFacing.EAST,
-        EnumFacing.WEST
+    private static final EnumFacing[] CLICK_ORDER = {
+        EnumFacing.DOWN, EnumFacing.NORTH, EnumFacing.SOUTH, EnumFacing.EAST, EnumFacing.WEST
     };
 
     private final Minecraft mc = Minecraft.getMinecraft();
+    private final RotationState rotationState = new RotationState(15.0F, 4.0F, new Random());
 
-    private final EnumSetting<Trigger> trigger = new EnumSetting<Trigger>("Trigger", Trigger.values(), Trigger.ALWAYS);
-    private final DecimalSetting blocks = new DecimalSetting("Blocks", 1.0D, 50.0D, 1.0D, 4.0D);
-    private final BooleanSetting silentAim = new BooleanSetting("Silent Aim", false);
+    private final EnumSetting<Trigger> trigger = new EnumSetting<Trigger>("Trigger", Trigger.values(), Trigger.FALL_DAMAGE);
+    private final DecimalSetting rotationSpeed = new DecimalSetting("Rotation Speed", 1.0D, 30.0D, 0.5D, 22.0D);
+    private final BooleanSetting silentAim = new BooleanSetting("Silent Aim", true);
     private final BooleanSetting rotateBack = new BooleanSetting("Rotate Back", true);
+    private final BooleanSetting autoSwitch = new BooleanSetting("Auto Switch", true);
     private final BooleanSetting returnToSlot = new BooleanSetting("Return To Slot", true);
-    private final NumberSetting clutchMoveDelay = new NumberSetting("Clutch Move Delay", 0, 20, 1, 0);
-    private final NumberSetting maxBlocks = new NumberSetting("Max Blocks", 1, 64, 1, 10);
-    private final DecimalSetting rotationSpeed = new DecimalSetting("Rotation Speed", 10.0D, 120.0D, 1.0D, 60.0D);
-    private final EnumSetting<FilterMode> filterMode = new EnumSetting<FilterMode>("Filter Mode", FilterMode.values(), FilterMode.NONE);
+    private final NumberSetting maxBlocks = new NumberSetting("Max Blocks", 1, 64, 1, 16);
+    private final NumberSetting searchDepth = new NumberSetting("Search Depth", 1, 5, 1, 3);
 
-    private int blocksPlaced;
-    private int savedSlot = -1;
-    private int moveFreezeTicks;
-    private int groundedClutchTicks;
+    // State
     private boolean clutching;
     private boolean returningToCamera;
+    private boolean rotating;
+    private int blocksPlaced;
+    private int savedSlot = -1;
     private float savedCamYaw;
     private float savedCamPitch;
-    private float currentYaw;
-    private float currentPitch;
-    private float targetYaw;
-    private float targetPitch;
-    private boolean rotationActive;
-    private int rotationHeldTicks;
-    private List<BlockPos> bridgePath;
-    private int bridgeIndex;
-    private PlacementCandidate bridgeStartPlacement;
-    private boolean slotSwitchPending;
+    private float[] activeAim;
+    private int aimHeldTicks;
+
     private final IEventListener<ClientRotationEvent> rotationListener = this::onClientRotation;
-    private final IEventListener<PrePlayerInputEvent> inputListener = this::onPrePlayerInput;
 
     private ClutchModule() {
-        super("Clutch", "Bridges blocks back to safety when knocked off an edge", Category.PLAYER, Keyboard.KEY_NONE);
-
-        blocks.setVisibility(new java.util.function.BooleanSupplier() {
-            @Override
-            public boolean getAsBoolean() {
-                return trigger.getValue() == Trigger.FALL_DISTANCE;
-            }
-        });
-        rotateBack.setVisibility(new java.util.function.BooleanSupplier() {
-            @Override
-            public boolean getAsBoolean() {
-                return !silentAim.isEnabled();
-            }
-        });
-
+        super("Clutch", "Places a block beneath you to save you from a fall.", Category.PLAYER, Keyboard.KEY_NONE);
+        rotateBack.setVisibility(() -> !silentAim.isEnabled());
         addSetting(trigger);
-        addSetting(blocks);
+        addSetting(rotationSpeed);
         addSetting(silentAim);
         addSetting(rotateBack);
+        addSetting(autoSwitch);
         addSetting(returnToSlot);
-        addSetting(clutchMoveDelay);
         addSetting(maxBlocks);
-        addSetting(rotationSpeed);
-        addSetting(filterMode);
+        addSetting(searchDepth);
     }
 
     public static ClutchModule getInstance() {
@@ -106,842 +94,361 @@ public final class ClutchModule extends Module {
     protected void onEnable() {
         resetState();
         EventBus.getInstance().register(ClientRotationEvent.class, rotationListener);
-        EventBus.getInstance().register(PrePlayerInputEvent.class, inputListener);
     }
 
     @Override
     protected void onDisable() {
         EventBus.getInstance().unregister(ClientRotationEvent.class, rotationListener);
-        EventBus.getInstance().unregister(PrePlayerInputEvent.class, inputListener);
-
-        EntityPlayerSP player = mc.thePlayer;
-        if (savedSlot != -1 && player != null && returnToSlot.isEnabled()) {
-            player.sendQueue.addToSendQueue(new C09PacketHeldItemChange(savedSlot));
-            player.inventory.currentItem = savedSlot;
-        }
-
+        restoreSlot();
         resetState();
-        clearRotationState();
+        rotationState.reset();
     }
 
     @Override
     public void onClientTick(TickEvent.ClientTickEvent event) {
-        if (event.phase != TickEvent.Phase.START) {
+        if (event.phase != TickEvent.Phase.START || !ready()) {
             return;
         }
-
-        if (!isPlayerReady()) {
-            return;
-        }
-
         EntityPlayerSP player = mc.thePlayer;
-        if (moveFreezeTicks > 0) {
-            moveFreezeTicks--;
-            return;
-        }
 
+        // Landed → finish up.
         if (player.onGround) {
-            handleGroundState(player);
+            if (clutching) {
+                finishClutch(player);
+            }
+            updateReturnRotation(player);
             return;
         }
-        groundedClutchTicks = 0;
 
-        if (player.motionY >= 0.0D) {
-            return;
-        }
-        if (!triggerMet(player)) {
-            return;
-        }
-        if (!hasBlocks(player)) {
+        // Only clutch while actually falling.
+        if (player.motionY >= 0.0D || !triggerMet(player) || findBlockSlot(player) == -1) {
+            if (clutching && !returningToCamera) {
+                // Lost the conditions mid-air; stop trying but keep state minimal.
+                clutching = false;
+            }
             return;
         }
 
         if (!clutching) {
-            clutching = true;
-            blocksPlaced = 0;
-            returningToCamera = false;
-            rotationHeldTicks = 0;
-            bridgeStartPlacement = null;
-            refreshBridgePlan(player);
-            savedSlot = returnToSlot.isEnabled() ? player.inventory.currentItem : -1;
-            savedCamYaw = player.rotationYaw;
-            savedCamPitch = player.rotationPitch;
+            beginClutch(player);
         }
-
         if (blocksPlaced >= maxBlocks.getValue()) {
             return;
         }
+
+        rotationState.setSpeed((float) rotationSpeed.getValue());
+        tryPlace(player);
+    }
+
+    // ── Clutch lifecycle ──────────────────────────────────────────────────
+
+    private void beginClutch(EntityPlayerSP player) {
+        clutching = true;
+        returningToCamera = false;
+        rotating = false;
+        blocksPlaced = 0;
+        aimHeldTicks = 0;
+        activeAim = null;
+        savedCamYaw = player.rotationYaw;
+        savedCamPitch = player.rotationPitch;
+        savedSlot = returnToSlot.isEnabled() ? player.inventory.currentItem : -1;
+    }
+
+    private void finishClutch(EntityPlayerSP player) {
+        clutching = false;
+        rotating = false;
+        blocksPlaced = 0;
+        activeAim = null;
+        restoreSlot();
+        if (!silentAim.isEnabled() && rotateBack.isEnabled()) {
+            returningToCamera = true;
+            rotationState.setTarget(savedCamYaw, savedCamPitch, player.rotationYaw, player.rotationPitch);
+        } else {
+            rotationState.reset();
+        }
+    }
+
+    private void updateReturnRotation(EntityPlayerSP player) {
+        if (!returningToCamera) {
+            return;
+        }
+        float[] r = rotationState.step();
+        player.rotationYaw = r[0];
+        player.rotationPitch = r[1];
+        if (rotationState.hasReachedTarget(1.5F)) {
+            returningToCamera = false;
+            rotationState.reset();
+        }
+    }
+
+    // ── Placement ─────────────────────────────────────────────────────────
+
+    private void tryPlace(EntityPlayerSP player) {
+        Placement place = findPlacement(player);
+        if (place == null) {
+            activeAim = null;
+            aimHeldTicks = 0;
+            return;
+        }
+
+        float[] aim = aimAt(player, place.hitVec);
+        activeAim = aim;
+        float fromYaw = rotating ? rotationState.getCurrentYaw() : player.rotationYaw;
+        float fromPitch = rotating ? rotationState.getCurrentPitch() : player.rotationPitch;
+        rotationState.setTarget(aim[0], aim[1], fromYaw, fromPitch);
+        rotating = true;
+        float[] stepped = rotationState.step();
+
+        if (!silentAim.isEnabled()) {
+            player.rotationYaw = stepped[0];
+            player.rotationPitch = stepped[1];
+        }
+
+        // Wait until we're actually aimed at the face before placing.
+        if (!rotationState.hasReachedTarget(3.5F)) {
+            aimHeldTicks = 0;
+            return;
+        }
+        if (++aimHeldTicks < 2) {
+            return;
+        }
+
         if (!ensureHoldingBlock(player)) {
             return;
         }
 
-        if (bridgePath == null || bridgeIndex >= bridgePath.size()) {
-            refreshBridgePlan(player);
-        }
-
-        PlacementCandidate placement = findBridgePlacement(player);
-        if (placement == null) {
-            refreshBridgePlan(player);
-            placement = findBridgePlacement(player);
-        }
-        if (placement == null) {
-            placement = findBestPlacement(player);
-        }
-        if (placement == null) {
+        // Confirm the ray (at our aim) actually hits the intended face.
+        MovingObjectPosition hit = rayTraceAt(player, stepped[0], stepped[1]);
+        if (hit == null || hit.typeOfHit != MovingObjectPosition.MovingObjectType.BLOCK
+            || !place.clicked.equals(hit.getBlockPos()) || hit.sideHit != place.side) {
             return;
         }
 
-        float[] aim = faceAim(player, placement.neighbor, placement.face);
-        setRotationTarget(aim[0], aim[1]);
-        stepRotation((float) rotationSpeed.getValue());
-        applyVisibleRotation();
-
-        if (!hasReachedTarget(2.0F)) {
-            rotationHeldTicks = 0;
+        ItemStack held = player.getHeldItem();
+        if (held == null || !(held.getItem() instanceof ItemBlock)) {
             return;
         }
 
-        rotationHeldTicks = Math.min(2, rotationHeldTicks + 1);
-        if (rotationHeldTicks < 2) {
-            return;
+        // CRITICAL: Force C03 rotation packet BEFORE C08 placement packet
+        // This prevents packet-order flags (rotation-before-action checks)
+        if (silentAim.isEnabled()) {
+            ClientRotationHelper rotHelper = ClientRotationHelper.get();
+            rotHelper.setServerRotations(stepped[0], stepped[1]);
+            // Apply immediately so the C03 goes out this tick
+            rotHelper.updateServerRotations();
         }
 
-        MovingObjectPosition hit = rayTraceAtRotation(player, getReach(player), currentYaw, currentPitch);
-        if (hit == null
-            || hit.typeOfHit != MovingObjectPosition.MovingObjectType.BLOCK
-            || !placement.neighbor.equals(hit.getBlockPos())
-            || hit.sideHit != placement.face) {
-            return;
-        }
-
-        if (attemptPlacement(player, hit)) {
-            advanceBridgeState(placement);
+        if (mc.playerController.onPlayerRightClick(player, mc.theWorld, held, hit.getBlockPos(), hit.sideHit, hit.hitVec)) {
+            player.swingItem();
             blocksPlaced++;
+            aimHeldTicks = 0;
         }
     }
+
+    /**
+     * Finds the air block beneath the player that has a solid face to click on.
+     * Prefers placing on top of the block directly below (you land on it), then
+     * the side walls (clutch off a wall).
+     */
+    private Placement findPlacement(EntityPlayerSP player) {
+        World world = mc.theWorld;
+        int px = MathHelper.floor_double(player.posX);
+        int pz = MathHelper.floor_double(player.posZ);
+        int feetY = MathHelper.floor_double(player.posY);
+        double reach = reach(player);
+
+        for (int dy = 1; dy <= searchDepth.getValue(); dy++) {
+            BlockPos base = new BlockPos(px, feetY - dy, pz);
+            if (!isReplaceable(world, base)) {
+                continue;
+            }
+            for (EnumFacing dir : CLICK_ORDER) {
+                BlockPos neighbor = base.offset(dir);
+                if (!isSolid(world, neighbor)) {
+                    continue;
+                }
+                EnumFacing side = dir.getOpposite();
+                Vec3 hitVec = new Vec3(
+                    neighbor.getX() + 0.5D + side.getFrontOffsetX() * 0.5D,
+                    neighbor.getY() + 0.5D + side.getFrontOffsetY() * 0.5D,
+                    neighbor.getZ() + 0.5D + side.getFrontOffsetZ() * 0.5D);
+                Vec3 eyes = player.getPositionEyes(1.0F);
+                if (eyes.squareDistanceTo(hitVec) > reach * reach) {
+                    continue;
+                }
+                return new Placement(neighbor, side, hitVec);
+            }
+        }
+        return null;
+    }
+
+    // ── Rotation event hooks ────────────────────────────────────────────────
 
     private void onClientRotation(ClientRotationEvent event) {
-        if (!isEnabled() || !silentAim.isEnabled() || !rotationActive || !isPlayerReady()) {
+        if (!isEnabled() || !ready()) {
             return;
         }
-
-        event.yaw = Float.valueOf(currentYaw);
-        event.pitch = Float.valueOf(currentPitch);
-    }
-
-    private void onPrePlayerInput(PrePlayerInputEvent event) {
-        if (!shouldLockMovement()) {
-            return;
-        }
-
-        if (clutching) {
-            event.setForward(resolveReverseForwardInput(mc.thePlayer));
-        } else {
-            event.setForward(0.0F);
-        }
-        event.setStrafe(0.0F);
-    }
-
-    private void handleGroundState(EntityPlayerSP player) {
-        if (clutching) {
-            applyImmediateLandingLock(player);
-            groundedClutchTicks++;
-            if (groundedClutchTicks < 4) {
-                return;
-            }
-            groundedClutchTicks = 0;
-            if (savedSlot != -1 && returnToSlot.isEnabled()) {
-                setSelectedSlot(savedSlot);
-                savedSlot = -1;
-            }
-
-            moveFreezeTicks = Math.max(1, clutchMoveDelay.getValue());
-            clutching = false;
-            blocksPlaced = 0;
-
-            if (rotateBack.isEnabled() && !silentAim.isEnabled()) {
-                returningToCamera = true;
-                setRotationTarget(savedCamYaw, savedCamPitch);
-            } else {
-                clearRotationState();
+        if (silentAim.isEnabled() && clutching && activeAim != null) {
+            float currentYaw = rotationState.getCurrentYaw();
+            float currentPitch = rotationState.getCurrentPitch();
+            if (!Float.isNaN(currentYaw) && !Float.isNaN(currentPitch)) {
+                event.yaw = Float.valueOf(currentYaw);
+                event.pitch = Float.valueOf(currentPitch);
             }
         }
-
-        if (!returningToCamera) {
-            return;
-        }
-
-        stepRotation((float) rotationSpeed.getValue());
-        applyVisibleRotation();
-
-        if (hasReachedTarget(2.0F)) {
-            clearRotationState();
-            returningToCamera = false;
-        }
     }
+
+    // ── Triggers ──────────────────────────────────────────────────────────
 
     private boolean triggerMet(EntityPlayerSP player) {
-        int playerX = MathHelper.floor_double(player.posX);
-        int playerZ = MathHelper.floor_double(player.posZ);
-        int feetY = MathHelper.floor_double(player.posY);
-
         switch (trigger.getValue()) {
             case ALWAYS:
                 return true;
-            case ON_VOID:
-                for (int y = feetY - 1; y >= feetY - 65; y--) {
-                    if (isSupportBlock(new BlockPos(playerX, y, playerZ))) {
-                        return false;
-                    }
-                }
-                return true;
-            case ON_LETHAL_FALL:
-                int lethalDepth = 0;
-                for (int y = feetY - 1; y >= feetY - 41; y--) {
-                    if (isSupportBlock(new BlockPos(playerX, y, playerZ))) {
-                        break;
-                    }
-                    lethalDepth++;
-                }
-                return player.fallDistance + lethalDepth - 3.0F >= player.getHealth() / 2.0F;
-            case FALL_DISTANCE:
-                int threshold = (int) blocks.getValue();
-                int predictedDepth = 0;
-                for (int y = feetY - 1; y >= feetY - threshold - 2; y--) {
-                    if (isSupportBlock(new BlockPos(playerX, y, playerZ))) {
-                        break;
-                    }
-                    predictedDepth++;
-                }
-                return player.fallDistance + predictedDepth >= blocks.getValue();
+            case VOID:
+                return !hasGroundBelow(player, 64);
+            case FALL_DAMAGE:
             default:
-                return false;
+                // Predicted fall damage = (fallDistance + drop to first ground) - 3.
+                int drop = dropToGround(player, 32);
+                float predicted = player.fallDistance + drop - 3.0F;
+                return predicted >= 2.0F; // ~1 heart or more
         }
+    }
+
+    private boolean hasGroundBelow(EntityPlayerSP player, int maxDepth) {
+        return dropToGround(player, maxDepth) < maxDepth;
+    }
+
+    private int dropToGround(EntityPlayerSP player, int maxDepth) {
+        World world = mc.theWorld;
+        int px = MathHelper.floor_double(player.posX);
+        int pz = MathHelper.floor_double(player.posZ);
+        int feetY = MathHelper.floor_double(player.posY);
+        for (int d = 1; d <= maxDepth; d++) {
+            if (isSolid(world, new BlockPos(px, feetY - d, pz))) {
+                return d;
+            }
+        }
+        return maxDepth;
+    }
+
+    // ── Inventory ───────────────────────────────────────────────────────────
+
+    private boolean ensureHoldingBlock(EntityPlayerSP player) {
+        ItemStack held = player.getHeldItem();
+        if (held != null && held.getItem() instanceof ItemBlock) {
+            return true;
+        }
+        if (!autoSwitch.isEnabled()) {
+            return false;
+        }
+        int slot = findBlockSlot(player);
+        if (slot == -1) {
+            return false;
+        }
+        player.inventory.currentItem = slot;
+        return player.getHeldItem() != null && player.getHeldItem().getItem() instanceof ItemBlock;
     }
 
     private int findBlockSlot(EntityPlayerSP player) {
         for (int slot = 0; slot <= 8; slot++) {
             ItemStack stack = player.inventory.getStackInSlot(slot);
-            if (stack == null || !(stack.getItem() instanceof ItemBlock)) {
+            if (stack == null || stack.stackSize <= 0 || !(stack.getItem() instanceof ItemBlock)) {
                 continue;
             }
-
             Block block = ((ItemBlock) stack.getItem()).getBlock();
             if (block != null && block.isFullCube()) {
                 return slot;
             }
         }
-
         return -1;
     }
 
-    private boolean hasBlocks(EntityPlayerSP player) {
-        return findBlockSlot(player) != -1;
-    }
-
-    private boolean ensureHoldingBlock(EntityPlayerSP player) {
-        ItemStack heldItem = player.getHeldItem();
-        if (heldItem != null && heldItem.getItem() instanceof ItemBlock) {
-            slotSwitchPending = false;
-            return true;
-        }
-
-        if (slotSwitchPending) {
-            return false;
-        }
-
-        int slot = findBlockSlot(player);
-        if (slot == -1) {
-            return false;
-        }
-
-        setSelectedSlot(slot);
-        slotSwitchPending = true;
-        return false;
-    }
-
-    private PlacementCandidate findBestPlacement(EntityPlayerSP player) {
-        double reach = getReach(player);
-        double eyeX = player.posX;
-        double eyeY = player.posY + player.getEyeHeight();
-        double eyeZ = player.posZ;
-        int blockX = MathHelper.floor_double(player.posX);
-        int feetY = MathHelper.floor_double(player.posY);
-        int blockZ = MathHelper.floor_double(player.posZ);
-        double velocityY = Math.min(player.motionY, 0.0D);
-        int targetY = MathHelper.floor_double(player.posY + velocityY) - 1;
-        AxisAlignedBB trajectoryBox = player.getEntityBoundingBox().addCoord(0.0D, velocityY, 0.0D);
-
-        PlacementCandidate best = null;
-        int minDy = blocksPlaced > 0 ? -4 : -2;
-        for (int dy = 0; dy >= minDy; dy--) {
-            for (int dx = -4; dx <= 4; dx++) {
-                for (int dz = -4; dz <= 4; dz++) {
-                    BlockPos airPos = new BlockPos(blockX + dx, feetY + dy, blockZ + dz);
-                    if (!isAirBlock(airPos)) {
-                        continue;
-                    }
-
-                    AxisAlignedBB blockBox = new AxisAlignedBB(
-                        airPos.getX(),
-                        airPos.getY(),
-                        airPos.getZ(),
-                        airPos.getX() + 1.0D,
-                        airPos.getY() + 1.0D,
-                        airPos.getZ() + 1.0D
-                    );
-                    if (trajectoryBox.intersectsWith(blockBox)) {
-                        continue;
-                    }
-
-                    for (EnumFacing direction : SEARCH_DIRECTIONS) {
-                        BlockPos neighbor = airPos.offset(direction);
-                        if (!isAttachableBlock(neighbor)) {
-                            continue;
-                        }
-                        Block neighborBlock = mc.theWorld.getBlockState(neighbor).getBlock();
-                        if (neighborBlock instanceof BlockLiquid) {
-                            continue;
-                        }
-
-                        EnumFacing face = direction.getOpposite();
-                        double hitX = neighbor.getX() + 0.5D + face.getFrontOffsetX() * 0.45D;
-                        double hitY = neighbor.getY() + 0.5D + face.getFrontOffsetY() * 0.45D;
-                        double hitZ = neighbor.getZ() + 0.5D + face.getFrontOffsetZ() * 0.45D;
-                        double deltaX = hitX - eyeX;
-                        double deltaY = hitY - eyeY;
-                        double deltaZ = hitZ - eyeZ;
-                        if (deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ > reach * reach) {
-                            continue;
-                        }
-
-                        double yDeviation = Math.abs(airPos.getY() - targetY);
-                        double horizontalDistance = Math.sqrt(
-                            (airPos.getX() + 0.5D - player.posX) * (airPos.getX() + 0.5D - player.posX)
-                                + (airPos.getZ() + 0.5D - player.posZ) * (airPos.getZ() + 0.5D - player.posZ)
-                        );
-                        double score = yDeviation * 20.0D + horizontalDistance;
-                        if (dx == 0 && dz == 0) {
-                            score += 6.0D;
-                        }
-                        if (best == null || score < best.score) {
-                            best = new PlacementCandidate(airPos, neighbor, face, score);
-                        }
-                    }
-                }
-            }
-        }
-
-        return best;
-    }
-
-    private PlacementCandidate findBridgePlacement(EntityPlayerSP player) {
-        if (bridgePath == null || bridgeIndex >= bridgePath.size()) {
-            return null;
-        }
-
-        while (bridgeIndex < bridgePath.size()) {
-            BlockPos target = bridgePath.get(bridgeIndex);
-            if (!isAirBlock(target)) {
-                bridgeIndex++;
-                continue;
-            }
-
-            PlacementCandidate placement;
-            if (bridgeIndex == 0 && bridgeStartPlacement != null) {
-                placement = bridgeStartPlacement;
-            } else {
-                placement = null;
-                if (bridgeIndex > 0) {
-                    placement = makePlacementAgainst(target, bridgePath.get(bridgeIndex - 1));
-                }
-                if (placement == null) {
-                    placement = findPlacementInfo(target);
-                }
-            }
-
-            if (placement == null) {
-                return null;
-            }
-            if (!isPlacementReachable(player, placement.neighbor, placement.face, getReach(player))) {
-                return null;
-            }
-
-            return placement;
-        }
-
-        return null;
-    }
-
-    private float[] faceAim(EntityPlayerSP player, BlockPos neighbor, EnumFacing face) {
-        double eyeY = player.posY + player.getEyeHeight();
-        double hitX = neighbor.getX() + 0.5D + face.getFrontOffsetX() * 0.45D;
-        double hitY = neighbor.getY() + 0.5D + face.getFrontOffsetY() * 0.45D;
-        double hitZ = neighbor.getZ() + 0.5D + face.getFrontOffsetZ() * 0.45D;
-        double deltaX = hitX - player.posX;
-        double deltaY = hitY - eyeY;
-        double deltaZ = hitZ - player.posZ;
-        double horizontalDistance = Math.max(0.01D, Math.sqrt(deltaX * deltaX + deltaZ * deltaZ));
-        float yaw = (float) Math.toDegrees(Math.atan2(-deltaX, deltaZ));
-        float pitch = MathHelper.clamp_float((float) Math.toDegrees(Math.atan2(-deltaY, horizontalDistance)), -90.0F, 90.0F);
-        return new float[] {yaw, pitch};
-    }
-
-    private void setRotationTarget(float yaw, float pitch) {
-        if (!rotationActive && mc.thePlayer != null) {
-            currentYaw = mc.thePlayer.rotationYaw;
-            currentPitch = mc.thePlayer.rotationPitch;
-        }
-
-        targetYaw = yaw;
-        targetPitch = MathHelper.clamp_float(pitch, -90.0F, 90.0F);
-        rotationActive = true;
-    }
-
-    private void stepRotation(float maxDegrees) {
-        if (!rotationActive || maxDegrees <= 0.0F || mc.gameSettings == null) {
+    private void restoreSlot() {
+        if (savedSlot == -1 || !returnToSlot.isEnabled() || mc.thePlayer == null) {
+            savedSlot = -1;
             return;
         }
-
-        float yawDiff = MathHelper.wrapAngleTo180_float(targetYaw - currentYaw);
-        float pitchDiff = MathHelper.wrapAngleTo180_float(targetPitch - currentPitch);
-        float distance = MathHelper.sqrt_float(yawDiff * yawDiff + pitchDiff * pitchDiff);
-        float sensitivity = mc.gameSettings.mouseSensitivity * 0.6F + 0.2F;
-        float gcd = sensitivity * sensitivity * sensitivity * 1.2F;
-
-        if (distance <= maxDegrees) {
-            snapToTarget(gcd);
-            return;
-        }
-
-        float ratio = maxDegrees / distance;
-        int mouseDx = Math.round((yawDiff * ratio) / gcd);
-        int mouseDy = Math.round((pitchDiff * ratio) / gcd);
-        currentYaw += mouseDx * gcd;
-        currentPitch = MathHelper.clamp_float(currentPitch + mouseDy * gcd, -90.0F, 90.0F);
+        mc.thePlayer.inventory.currentItem = savedSlot;
+        savedSlot = -1;
     }
 
-    private void snapToTarget(float gcd) {
-        float yawDiff = MathHelper.wrapAngleTo180_float(targetYaw - currentYaw);
-        float pitchDiff = targetPitch - currentPitch;
-        int mouseDx = Math.round(yawDiff / gcd);
-        int mouseDy = Math.round(pitchDiff / gcd);
-        currentYaw += mouseDx * gcd;
-        currentPitch = MathHelper.clamp_float(currentPitch + mouseDy * gcd, -90.0F, 90.0F);
+    // ── Helpers ─────────────────────────────────────────────────────────────
+
+    private float[] aimAt(EntityPlayerSP player, Vec3 target) {
+        double dx = target.xCoord - player.posX;
+        double dy = target.yCoord - (player.posY + player.getEyeHeight());
+        double dz = target.zCoord - player.posZ;
+        double horizontal = Math.sqrt(dx * dx + dz * dz);
+        float yaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0D);
+        float pitch = (float) (-Math.toDegrees(Math.atan2(dy, horizontal)));
+        return new float[] { yaw, MathHelper.clamp_float(pitch, -90.0F, 90.0F) };
     }
 
-    private boolean hasReachedTarget(float toleranceDegrees) {
-        if (!rotationActive) {
-            return true;
-        }
-
-        return Math.abs(MathHelper.wrapAngleTo180_float(targetYaw - currentYaw)) <= toleranceDegrees
-            && Math.abs(MathHelper.wrapAngleTo180_float(targetPitch - currentPitch)) <= toleranceDegrees;
-    }
-
-    private void applyVisibleRotation() {
-        if (silentAim.isEnabled() || mc.thePlayer == null || !rotationActive) {
-            return;
-        }
-
-        mc.thePlayer.rotationYaw = currentYaw;
-        mc.thePlayer.rotationPitch = currentPitch;
-    }
-
-    private MovingObjectPosition rayTraceAtRotation(EntityPlayerSP player, double reach, float yaw, float pitch) {
-        float savedYaw = player.rotationYaw;
-        float savedPitch = player.rotationPitch;
-
+    private MovingObjectPosition rayTraceAt(EntityPlayerSP player, float yaw, float pitch) {
+        float sy = player.rotationYaw;
+        float sp = player.rotationPitch;
         player.rotationYaw = yaw;
         player.rotationPitch = pitch;
-        MovingObjectPosition hit = player.rayTrace(reach, 1.0F);
-        player.rotationYaw = savedYaw;
-        player.rotationPitch = savedPitch;
+        MovingObjectPosition hit = player.rayTrace(reach(player), 1.0F);
+        player.rotationYaw = sy;
+        player.rotationPitch = sp;
         return hit;
     }
 
-    private boolean attemptPlacement(EntityPlayerSP player, MovingObjectPosition hit) {
-        if (mc.playerController == null || hit == null || hit.hitVec == null) {
-            return false;
-        }
-
-        ItemStack heldItem = player.getHeldItem();
-        if (heldItem == null || !(heldItem.getItem() instanceof ItemBlock)) {
-            return false;
-        }
-
-        mc.objectMouseOver = hit;
-
-        if (mc.playerController.onPlayerRightClick(player, mc.theWorld, heldItem, hit.getBlockPos(), hit.sideHit, hit.hitVec)) {
-            player.swingItem();
-            return true;
-        }
-
-        return false;
-    }
-
-    private void advanceBridgeState(PlacementCandidate placement) {
-        if (bridgePath == null || bridgeIndex >= bridgePath.size() || placement == null || placement.targetPos == null) {
-            return;
-        }
-
-        if (placement.targetPos.equals(bridgePath.get(bridgeIndex))) {
-            bridgeIndex++;
-            if (bridgeIndex > 0) {
-                bridgeStartPlacement = null;
-            }
-        }
-    }
-
-    private double getReach(EntityPlayerSP player) {
+    private double reach(EntityPlayerSP player) {
         return player.capabilities.isCreativeMode ? 5.0D : 4.5D;
     }
 
-    private boolean isAirBlock(BlockPos pos) {
-        return mc.theWorld.getBlockState(pos).getBlock().getMaterial() == Material.air;
+    private boolean isReplaceable(World world, BlockPos pos) {
+        Block block = world.getBlockState(pos).getBlock();
+        return block.getMaterial() == net.minecraft.block.material.Material.air
+            || block.getMaterial().isReplaceable();
     }
 
-    private boolean isSupportBlock(BlockPos pos) {
-        Block block = mc.theWorld.getBlockState(pos).getBlock();
-        return block.getMaterial() != Material.air && !(block instanceof BlockLiquid);
-    }
-
-    private boolean isAttachableBlock(BlockPos pos) {
-        Block block = mc.theWorld.getBlockState(pos).getBlock();
-        return block.getMaterial() != Material.air && !(block instanceof BlockLiquid);
-    }
-
-    private boolean isPlacementReachable(EntityPlayerSP player, BlockPos neighbor, EnumFacing face, double reach) {
-        double eyeX = player.posX;
-        double eyeY = player.posY + player.getEyeHeight();
-        double eyeZ = player.posZ;
-        double hitX = neighbor.getX() + 0.5D + face.getFrontOffsetX() * 0.45D;
-        double hitY = neighbor.getY() + 0.5D + face.getFrontOffsetY() * 0.45D;
-        double hitZ = neighbor.getZ() + 0.5D + face.getFrontOffsetZ() * 0.45D;
-        double deltaX = hitX - eyeX;
-        double deltaY = hitY - eyeY;
-        double deltaZ = hitZ - eyeZ;
-        return deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ <= reach * reach;
-    }
-
-    private List<BlockPos> buildBridgePath(EntityPlayerSP player) {
-        PlacementCandidate edge = findNearestEdge(player);
-        if (edge == null || edge.targetPos == null) {
-            return null;
-        }
-
-        double futureX = player.posX + player.motionX;
-        double futureZ = player.posZ + player.motionZ;
-        int playerX = MathHelper.floor_double(futureX);
-        int playerZ = MathHelper.floor_double(futureZ);
-        int estimatedLength = Math.abs(edge.targetPos.getX() - playerX) + Math.abs(edge.targetPos.getZ() - playerZ);
-        if (estimatedLength < 1) {
-            estimatedLength = 1;
-        }
-
-        double predictedY = predictYAfterTicks(player, estimatedLength);
-        int bridgeY = MathHelper.floor_double(predictedY) - 1;
-        int supportY = edge.neighbor.getY();
-        if (bridgeY > supportY) {
-            bridgeY = supportY;
-        }
-
-        BlockPos bridgeStart = new BlockPos(edge.targetPos.getX(), bridgeY, edge.targetPos.getZ());
-        BlockPos playerColumn = new BlockPos(playerX, bridgeY, playerZ);
-        List<BlockPos> path = calculateBridgePath(bridgeStart, playerColumn);
-        if (path.isEmpty()) {
-            return null;
-        }
-
-        double fracX = futureX - Math.floor(futureX);
-        double fracZ = futureZ - Math.floor(futureZ);
-        BlockPos last = path.get(path.size() - 1);
-        if (fracX >= 0.7D) {
-            path.add(new BlockPos(last.getX() + 1, bridgeY, last.getZ()));
-        } else if (fracX <= 0.3D) {
-            path.add(new BlockPos(last.getX() - 1, bridgeY, last.getZ()));
-        }
-
-        last = path.get(path.size() - 1);
-        if (fracZ >= 0.7D) {
-            path.add(new BlockPos(last.getX(), bridgeY, last.getZ() + 1));
-        } else if (fracZ <= 0.3D) {
-            path.add(new BlockPos(last.getX(), bridgeY, last.getZ() - 1));
-        }
-
-        int availableBlocks = countAvailableBlocks(player);
-        if (path.size() > availableBlocks) {
-            path = new ArrayList<BlockPos>(path.subList(0, availableBlocks));
-        }
-        if (path.isEmpty()) {
-            return null;
-        }
-
-        PlacementCandidate startPlacement = findPlacementInfo(path.get(0));
-        if (startPlacement != null) {
-            bridgeStartPlacement = startPlacement;
-        } else {
-            bridgeStartPlacement = new PlacementCandidate(path.get(0), edge.neighbor, edge.face, edge.score);
-        }
-        return path;
-    }
-
-    private void refreshBridgePlan(EntityPlayerSP player) {
-        bridgeStartPlacement = null;
-        bridgePath = buildBridgePath(player);
-        bridgeIndex = 0;
-    }
-
-    private PlacementCandidate findNearestEdge(EntityPlayerSP player) {
-        int playerX = MathHelper.floor_double(player.posX);
-        int playerY = MathHelper.floor_double(player.posY);
-        int playerZ = MathHelper.floor_double(player.posZ);
-        PlacementCandidate best = null;
-        double bestScore = Double.MAX_VALUE;
-        int range = 4;
-        double reach = getReach(player);
-
-        for (int dy = -4; dy <= 1; dy++) {
-            for (int dx = -range; dx <= range; dx++) {
-                for (int dz = -range; dz <= range; dz++) {
-                    BlockPos solidPos = new BlockPos(playerX + dx, playerY + dy, playerZ + dz);
-                    if (!isAttachableBlock(solidPos)) {
-                        continue;
-                    }
-
-                    for (EnumFacing face : EnumFacing.values()) {
-                        BlockPos airPos = solidPos.offset(face);
-                        if (!isAirBlock(airPos)) {
-                            continue;
-                        }
-                        if (!isPlacementReachable(player, solidPos, face, reach)) {
-                            continue;
-                        }
-
-                        double horizontalDistance = Math.sqrt(
-                            (airPos.getX() + 0.5D - player.posX) * (airPos.getX() + 0.5D - player.posX)
-                                + (airPos.getZ() + 0.5D - player.posZ) * (airPos.getZ() + 0.5D - player.posZ)
-                        );
-                        double verticalDistance = Math.abs(airPos.getY() - (playerY - 1));
-                        double score = horizontalDistance + verticalDistance * 3.0D;
-                        if (best == null || score < bestScore) {
-                            bestScore = score;
-                            best = new PlacementCandidate(airPos, solidPos, face, score);
-                        }
-                    }
-                }
-            }
-        }
-
-        return best;
-    }
-
-    private PlacementCandidate findPlacementInfo(BlockPos targetPos) {
-        if (!isAirBlock(targetPos)) {
-            return null;
-        }
-
-        EnumFacing[] priorities = new EnumFacing[] {
-            EnumFacing.DOWN,
-            EnumFacing.NORTH,
-            EnumFacing.SOUTH,
-            EnumFacing.EAST,
-            EnumFacing.WEST,
-            EnumFacing.UP
-        };
-        for (EnumFacing face : priorities) {
-            BlockPos neighbor = targetPos.offset(face);
-            if (!isAttachableBlock(neighbor)) {
-                continue;
-            }
-            return new PlacementCandidate(targetPos, neighbor, face.getOpposite(), 0.0D);
-        }
-
-        return null;
-    }
-
-    private PlacementCandidate makePlacementAgainst(BlockPos targetPos, BlockPos neighbor) {
-        if (!isAttachableBlock(neighbor)) {
-            return null;
-        }
-
-        int dx = targetPos.getX() - neighbor.getX();
-        int dy = targetPos.getY() - neighbor.getY();
-        int dz = targetPos.getZ() - neighbor.getZ();
-
-        EnumFacing face;
-        if (dx == 1) {
-            face = EnumFacing.EAST;
-        } else if (dx == -1) {
-            face = EnumFacing.WEST;
-        } else if (dz == 1) {
-            face = EnumFacing.SOUTH;
-        } else if (dz == -1) {
-            face = EnumFacing.NORTH;
-        } else if (dy == 1) {
-            face = EnumFacing.UP;
-        } else if (dy == -1) {
-            face = EnumFacing.DOWN;
-        } else {
-            return null;
-        }
-
-        return new PlacementCandidate(targetPos, neighbor, face, 0.0D);
-    }
-
-    private List<BlockPos> calculateBridgePath(BlockPos from, BlockPos to) {
-        List<BlockPos> path = new ArrayList<BlockPos>();
-        path.add(from);
-
-        int x = from.getX();
-        int z = from.getZ();
-        int y = from.getY();
-        int targetX = to.getX();
-        int targetZ = to.getZ();
-
-        while (x != targetX || z != targetZ) {
-            int dx = targetX - x;
-            int dz = targetZ - z;
-            if (Math.abs(dx) >= Math.abs(dz)) {
-                x += dx > 0 ? 1 : -1;
-            } else {
-                z += dz > 0 ? 1 : -1;
-            }
-            path.add(new BlockPos(x, y, z));
-        }
-
-        return path;
-    }
-
-    private double predictYAfterTicks(EntityPlayerSP player, int ticks) {
-        double y = player.posY;
-        double velocityY = player.motionY;
-        for (int i = 0; i < ticks; i++) {
-            velocityY = (velocityY - 0.08D) * 0.98D;
-            y += velocityY;
-        }
-        return y;
-    }
-
-    private int countAvailableBlocks(EntityPlayerSP player) {
-        int total = 0;
-        for (int slot = 0; slot <= 8; slot++) {
-            ItemStack stack = player.inventory.getStackInSlot(slot);
-            if (stack == null || !(stack.getItem() instanceof ItemBlock)) {
-                continue;
-            }
-
-            Block block = ((ItemBlock) stack.getItem()).getBlock();
-            if (block == null || !block.isFullCube()) {
-                continue;
-            }
-
-            total += stack.stackSize;
-        }
-        return total;
-    }
-
-    private void setSelectedSlot(int slot) {
-        if (!isPlayerReady() || mc.thePlayer.inventory.currentItem == slot) {
-            return;
-        }
-
-        mc.thePlayer.inventory.currentItem = slot;
-        if (mc.playerController != null) {
-            mc.playerController.updateController();
-        }
-    }
-
-    private void clearRotationState() {
-        rotationActive = false;
-        targetYaw = 0.0F;
-        targetPitch = 0.0F;
-        rotationHeldTicks = 0;
-        ClientRotationHelper.get().clearRequestedRotations();
+    private boolean isSolid(World world, BlockPos pos) {
+        Block block = world.getBlockState(pos).getBlock();
+        return block.getMaterial().isSolid() && block.isFullCube();
     }
 
     private void resetState() {
-        blocksPlaced = 0;
-        savedSlot = -1;
-        moveFreezeTicks = 0;
-        groundedClutchTicks = 0;
-        slotSwitchPending = false;
         clutching = false;
         returningToCamera = false;
-        rotationHeldTicks = 0;
-        bridgePath = null;
-        bridgeIndex = 0;
-        bridgeStartPlacement = null;
+        rotating = false;
+        blocksPlaced = 0;
+        savedSlot = -1;
+        activeAim = null;
+        aimHeldTicks = 0;
     }
 
-    private boolean shouldLockMovement() {
-        return isEnabled() && isPlayerReady() && (clutching || returningToCamera || moveFreezeTicks > 0);
-    }
-
-    private void applyImmediateLandingLock(EntityPlayerSP player) {
-        if (player == null || player.movementInput == null) {
-            return;
-        }
-
-        player.moveForward = clutching ? resolveReverseForwardInput(player) : 0.0F;
-        player.moveStrafing = 0.0F;
-        player.movementInput.moveForward = player.moveForward;
-        player.movementInput.moveStrafe = 0.0F;
-    }
-
-    private float resolveReverseForwardInput(EntityPlayerSP player) {
-        if (player == null) {
-            return 0.0F;
-        }
-
-        double motionX = player.motionX;
-        double motionZ = player.motionZ;
-        double horizontalSpeedSq = motionX * motionX + motionZ * motionZ;
-        if (horizontalSpeedSq < 1.0E-4D) {
-            return 0.0F;
-        }
-
-        double yawRadians = Math.toRadians(player.rotationYaw);
-        double forwardX = -Math.sin(yawRadians);
-        double forwardZ = Math.cos(yawRadians);
-        double projectedForwardMotion = motionX * forwardX + motionZ * forwardZ;
-        if (projectedForwardMotion > 0.01D) {
-            return -1.0F;
-        }
-        if (projectedForwardMotion < -0.01D) {
-            return 1.0F;
-        }
-        return 0.0F;
-    }
-
-    private boolean isPlayerReady() {
+    private boolean ready() {
         return mc.thePlayer != null && mc.theWorld != null && !mc.thePlayer.isDead;
     }
 
+    @Override
+    public String getHudInfo() {
+        return clutching ? blocksPlaced + " placed" : "";
+    }
+
     public enum Trigger {
-        ALWAYS,
-        ON_VOID,
-        ON_LETHAL_FALL,
-        FALL_DISTANCE
+        ALWAYS("Always"),
+        VOID("Void"),
+        FALL_DAMAGE("Fall Damage");
+
+        private final String label;
+        Trigger(String label) { this.label = label; }
+        @Override public String toString() { return label; }
     }
 
-    public enum FilterMode {
-        NONE,
-        BLACKLIST,
-        WHITELIST
-    }
+    private static final class Placement {
+        private final BlockPos clicked;
+        private final EnumFacing side;
+        private final Vec3 hitVec;
 
-    private static final class PlacementCandidate {
-        private final BlockPos targetPos;
-        private final BlockPos neighbor;
-        private final EnumFacing face;
-        private final double score;
-
-        private PlacementCandidate(BlockPos targetPos, BlockPos neighbor, EnumFacing face, double score) {
-            this.targetPos = targetPos;
-            this.neighbor = neighbor;
-            this.face = face;
-            this.score = score;
+        private Placement(BlockPos clicked, EnumFacing side, Vec3 hitVec) {
+            this.clicked = clicked;
+            this.side = side;
+            this.hitVec = hitVec;
         }
     }
 }
