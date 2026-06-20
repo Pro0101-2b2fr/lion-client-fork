@@ -71,8 +71,21 @@ public final class ReachModule extends Module {
             return;
         }
 
-        minecraft.playerController.attackEntity(minecraft.thePlayer, target);
+        // CRITICAL FIX: Swing BEFORE attacking.
+        // The old code called attackEntity() then swingItem(), which sent
+        // C02PacketUseEntity BEFORE C0AAnimationPacket to the server.
+        // Anti-cheats see "attack without swing" → BadPackets flag.
+        //
+        // Correct order:
+        // 1. swingItem() → sends C0A (swing animation) to server
+        // 2. sendUseEntity() → sends C02 (attack) to server
+        // This matches vanilla packet order exactly.
         minecraft.thePlayer.swingItem();
+        minecraft.thePlayer.sendQueue.addToSendQueue(
+            new net.minecraft.network.play.client.C02PacketUseEntity(
+                target, net.minecraft.network.play.client.C02PacketUseEntity.Action.ATTACK
+            )
+        );
         event.setCanceled(true);
     }
 
@@ -117,7 +130,7 @@ public final class ReachModule extends Module {
             }
 
             double distance = eyes.distanceTo(intercept.hitVec);
-            if (distance < bestDistance || bestDistance == 0.0D) {
+            if (distance < bestDistance) {
                 pointedEntity = entity;
                 bestDistance = distance;
             }

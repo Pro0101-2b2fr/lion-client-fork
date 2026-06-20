@@ -93,9 +93,13 @@ public final class NameTagsModule extends Module {
     private void renderTag(Minecraft minecraft, EntityPlayer player, double x, double y, double z) {
         FontRenderer font = minecraft.fontRendererObj;
         float distance = (float) Math.sqrt(x * x + y * y + z * z);
-        // Dynamic scaling: tag grows with distance so it stays readable.
+        // Dynamic scaling: scale strictly proportional to distance so the tag
+        // occupies a constant amount of SCREEN space at any range (apparent size
+        // ~ worldScale / distance, so worldScale must grow linearly with distance).
+        // The previous Math.max(1.0, ...) floor pinned the world size below 8m,
+        // which made the tag shrink on screen as you backed away up close.
         float baseScale = (float) (scale.getValue() * 0.026F);
-        float dynamicScale = baseScale * Math.max(1.0F, distance / 8.0F);
+        float dynamicScale = baseScale * (Math.max(distance, 1.0F) / 8.0F);
 
         String name = player.getDisplayName().getFormattedText();
         String text = name;

@@ -15,6 +15,7 @@ import com.lionclient.feature.setting.BooleanSetting;
 import com.lionclient.feature.setting.ColorSetting;
 import com.lionclient.feature.setting.DecimalSetting;
 import com.lionclient.feature.setting.EnumSetting;
+import com.lionclient.feature.setting.FloatSetting;
 import com.lionclient.feature.setting.IntRangeSetting;
 import com.lionclient.feature.setting.NumberSetting;
 import com.lionclient.feature.setting.Setting;
@@ -174,6 +175,8 @@ public final class ConfigManager {
                         ((BooleanSetting) setting).setEnabled(value.getAsBoolean());
                     } else if (setting instanceof DecimalSetting) {
                         ((DecimalSetting) setting).setManualValue(value.getAsDouble());
+                    } else if (setting instanceof FloatSetting) {
+                        ((FloatSetting) setting).setManualValue(value.getAsFloat());
                     } else if (setting instanceof IntRangeSetting && value.isJsonArray()) {
                         JsonArray array = value.getAsJsonArray();
                         if (array.size() >= 2) {
@@ -230,6 +233,8 @@ public final class ConfigManager {
                     settingsJson.addProperty(setting.getName(), ((BooleanSetting) setting).isEnabled());
                 } else if (setting instanceof DecimalSetting) {
                     settingsJson.addProperty(setting.getName(), ((DecimalSetting) setting).getValue());
+                } else if (setting instanceof FloatSetting) {
+                    settingsJson.addProperty(setting.getName(), ((FloatSetting) setting).getValue());
                 } else if (setting instanceof IntRangeSetting) {
                     IntRangeSetting range = (IntRangeSetting) setting;
                     JsonArray array = new JsonArray();

@@ -64,6 +64,11 @@ public final class PacketDelayManager {
         Packet<?> packet,
         GenericFutureListener<? extends Future<? super Void>>[] listeners
     ) {
+        // Don't intercept in singleplayer — no network connection to delay
+        if (minecraft.isSingleplayer()) {
+            return false;
+        }
+
         if (consumeOutboundFastTrack(packet)) {
             return false;
         }
@@ -226,6 +231,14 @@ public final class PacketDelayManager {
         lastOutboundReleaseAt = 0L;
         lastInboundReleaseAt = 0L;
         outboundFastTrack.clear();
+    }
+
+    /**
+     * Immediately releases all queued packets (used when disabling FakeLag).
+     */
+    public void flushAll() {
+        flushQueuedOutboundPackets();
+        flushQueuedInboundPackets();
     }
 
     private boolean hasQueuedOutboundPackets() {

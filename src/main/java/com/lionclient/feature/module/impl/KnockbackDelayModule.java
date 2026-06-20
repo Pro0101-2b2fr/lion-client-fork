@@ -25,6 +25,8 @@ public final class KnockbackDelayModule extends Module {
     @Override
     protected void onDisable() {
         holdPacketsUntil = 0L;
+        cachedPlayerId = -1;
+        cachedOnGround = false;
 
         LionClient client = LionClient.getInstance();
         if (client != null) {

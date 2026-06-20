@@ -2,11 +2,15 @@ package com.lionclient.mixin;
 
 import com.lionclient.LionClient;
 import com.lionclient.combat.ClientRotationHelper;
+import com.lionclient.feature.module.impl.AimAssistModule;
 import com.lionclient.feature.module.impl.AntiFireballModule;
 import com.lionclient.feature.module.impl.KillAuraModule;
 import com.lionclient.feature.module.impl.NoHurtCamModule;
+import com.lionclient.util.MouseGcdHelper;
+import com.lionclient.combat.KillAuraRotationUtils;
 import net.minecraft.client.Minecraft;
 import net.minecraft.entity.Entity;
+import net.minecraft.util.MathHelper;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
